@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SiteGen.Cli/SiteGen.Cli.csproj" />
+    <Project Path="src/SiteGen.Config/SiteGen.Config.csproj" />
+    <Project Path="src/SiteGen.Content/SiteGen.Content.csproj" />
+    <Project Path="src/SiteGen.Engine.Abstractions/SiteGen.Engine.Abstractions.csproj" />
+    <Project Path="src/SiteGen.Engine/SiteGen.Engine.csproj" />
+    <Project Path="src/SiteGen.Rendering/SiteGen.Rendering.csproj" />
+    <Project Path="src/SiteGen.Routing/SiteGen.Routing.csproj" />
+    <Project Path="src/SiteGen.Shared/SiteGen.Shared.csproj" />
+  </Folder>
+  <Project Path="src/plugins/SampleAfterBuildPlugin/SampleAfterBuildPlugin.csproj" />
+</Solution>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SiteGen.Config\SiteGen.Config.csproj" />
+    <ProjectReference Include="..\SiteGen.Content\SiteGen.Content.csproj" />
+    <ProjectReference Include="..\SiteGen.Routing\SiteGen.Routing.csproj" />
+    <ProjectReference Include="..\SiteGen.Shared\SiteGen.Shared.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
+

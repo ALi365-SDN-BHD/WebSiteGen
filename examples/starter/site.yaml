@@ -1,0 +1,31 @@
+site:
+  name: starter
+  title: SiteGen Starter
+  baseUrl: /
+  language: zh-CN
+  pluginFailMode: strict
+  timezone: Asia/Shanghai
+content:
+  provider: markdown
+  markdown:
+    dir: content
+    defaultType: page
+build:
+  output: dist
+  clean: true
+theme:
+  layouts: layouts
+  assets: assets
+  static: static
+  name: alt
+taxonomy:
+  itemFields:
+    - cover
+    - image
+    - date
+  templates:
+    categories:
+      termTemplate: pages/category.html
+logging:
+  level: info
+...

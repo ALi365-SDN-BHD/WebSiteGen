@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SiteGen.Engine.Abstractions\SiteGen.Engine.Abstractions.csproj" />
+    <ProjectReference Include="..\SiteGen.Config\SiteGen.Config.csproj" />
+    <ProjectReference Include="..\SiteGen.Content\SiteGen.Content.csproj" />
+    <ProjectReference Include="..\SiteGen.Rendering\SiteGen.Rendering.csproj" />
+    <ProjectReference Include="..\SiteGen.Routing\SiteGen.Routing.csproj" />
+    <ProjectReference Include="..\SiteGen.Shared\SiteGen.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\plugins\*\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SiteGen.PluginSourceGenerator\SiteGen.PluginSourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

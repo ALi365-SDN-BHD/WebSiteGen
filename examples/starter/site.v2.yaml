@@ -1,0 +1,29 @@
+site:
+  name: starter
+  title: SiteGen Starter (v2 sources)
+  baseUrl: /
+  language: zh-CN
+  timezone: Asia/Shanghai
+
+content:
+  provider: sources
+  sources:
+    - type: markdown
+      dir: content
+      defaultType: page
+    - type: markdown
+      dir: content_extra
+      defaultType: page
+
+build:
+  output: dist
+  clean: false
+
+theme:
+  layouts: layouts
+  assets: assets
+  static: static
+
+logging:
+  level: info
+
