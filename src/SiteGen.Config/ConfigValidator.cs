@@ -23,6 +23,11 @@ public static class ConfigValidator
             throw new ConfigException("site.url must start with http:// or https:// when set.");
         }
 
+        if (config.Site.AutoSummaryMaxLength <= 0 || config.Site.AutoSummaryMaxLength > 5000)
+        {
+            throw new ConfigException("site.autoSummaryMaxLength must be between 1 and 5000.");
+        }
+
         if (string.IsNullOrWhiteSpace(config.Site.BaseUrl))
         {
             throw new ConfigException("site.baseUrl is required.");
@@ -142,6 +147,7 @@ public static class ConfigValidator
                         throw new ConfigException("content.sources[].markdown is required when type is markdown.");
                     }
 
+                    ValidateMarkdown(source.Markdown);
                     continue;
                 }
 
@@ -164,6 +170,8 @@ public static class ConfigValidator
             {
                 throw new ConfigException("content.markdown is required when provider is markdown.");
             }
+
+            ValidateMarkdown(config.Content.Markdown);
         }
 
         if (string.IsNullOrWhiteSpace(config.Build.Output))
@@ -283,6 +291,26 @@ public static class ConfigValidator
             throw new ConfigException("content.notion.databaseId is required.");
         }
 
+        if (notion.MaxItems is not null && notion.MaxItems.Value <= 0)
+        {
+            throw new ConfigException("content.notion.maxItems must be a positive integer when set.");
+        }
+
+        if (notion.RenderConcurrency is not null && notion.RenderConcurrency.Value <= 0)
+        {
+            throw new ConfigException("content.notion.renderConcurrency must be a positive integer when set.");
+        }
+
+        if (notion.MaxRps is not null && notion.MaxRps.Value <= 0)
+        {
+            throw new ConfigException("content.notion.maxRps must be a positive integer when set.");
+        }
+
+        if (notion.MaxRetries is not null && notion.MaxRetries.Value < 0)
+        {
+            throw new ConfigException("content.notion.maxRetries must be a non-negative integer when set.");
+        }
+
         var mode = (notion.FieldPolicy.Mode ?? "whitelist").Trim().ToLowerInvariant();
         if (mode is not ("whitelist" or "all"))
         {
@@ -309,10 +337,64 @@ public static class ConfigValidator
             }
         }
 
+        if (notion.IncludeSlugs is { Count: > 0 })
+        {
+            if (string.IsNullOrWhiteSpace(notion.IncludeSlugProperty))
+            {
+                throw new ConfigException("content.notion.includeSlugProperty is required when includeSlugs is set.");
+            }
+        }
+
+        var cacheMode = (notion.CacheMode ?? "off").Trim().ToLowerInvariant();
+        if (cacheMode is not ("off" or "readwrite" or "readonly"))
+        {
+            throw new ConfigException("content.notion.cacheMode must be off|readwrite|readonly.");
+        }
+
+        if (notion.CacheDir is not null && string.IsNullOrWhiteSpace(notion.CacheDir))
+        {
+            throw new ConfigException("content.notion.cacheDir must be a non-empty string when set.");
+        }
+
         var token = Environment.GetEnvironmentVariable("NOTION_TOKEN");
         if (string.IsNullOrWhiteSpace(token))
         {
             throw new ConfigException("NOTION_TOKEN is required for notion provider and must come from environment variables.");
+        }
+    }
+
+    private static void ValidateMarkdown(MarkdownConfig markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown.Dir))
+        {
+            throw new ConfigException("content.markdown.dir is required.");
+        }
+
+        if (markdown.MaxItems is not null && markdown.MaxItems.Value <= 0)
+        {
+            throw new ConfigException("content.markdown.maxItems must be a positive integer when set.");
+        }
+
+        if (markdown.IncludePaths is { Count: > 0 } includePaths)
+        {
+            for (var i = 0; i < includePaths.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(includePaths[i]))
+                {
+                    throw new ConfigException($"content.markdown.includePaths[{i}] must be a non-empty string.");
+                }
+            }
+        }
+
+        if (markdown.IncludeGlobs is { Count: > 0 } includeGlobs)
+        {
+            for (var i = 0; i < includeGlobs.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(includeGlobs[i]))
+                {
+                    throw new ConfigException($"content.markdown.includeGlobs[{i}] must be a non-empty string.");
+                }
+            }
         }
     }
 }

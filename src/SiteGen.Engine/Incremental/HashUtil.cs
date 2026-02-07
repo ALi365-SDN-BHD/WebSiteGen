@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -26,6 +27,9 @@ public static class HashUtil
         }
 
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> separator = stackalloc byte[1];
+        separator[0] = 0;
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
 
         var files = Directory.EnumerateFiles(rootDir, "*", SearchOption.AllDirectories)
             .Select(p => new
@@ -36,22 +40,34 @@ public static class HashUtil
             .OrderBy(x => x.Relative, StringComparer.Ordinal)
             .ToList();
 
-        foreach (var f in files)
+        try
         {
-            var nameBytes = Encoding.UTF8.GetBytes(f.Relative);
-            hasher.AppendData(nameBytes);
-            hasher.AppendData(new byte[] { 0 });
+            foreach (var f in files)
+            {
+                var nameBytes = Encoding.UTF8.GetBytes(f.Relative);
+                hasher.AppendData(nameBytes);
+                hasher.AppendData(separator);
 
-            var content = File.ReadAllBytes(f.FullPath);
-            hasher.AppendData(content);
-            hasher.AppendData(new byte[] { 0 });
+                using var stream = File.OpenRead(f.FullPath);
+                int read;
+                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    hasher.AppendData(buffer.AsSpan(0, read));
+                }
+
+                hasher.AppendData(separator);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
 
         var digest = hasher.GetHashAndReset();
         return ToHexLower(digest);
     }
 
-    private static string ToHexLower(ReadOnlySpan<byte> bytes)
+    public static string ToHexLower(ReadOnlySpan<byte> bytes)
     {
         var chars = new char[bytes.Length * 2];
         for (var i = 0; i < bytes.Length; i++)
@@ -69,4 +85,3 @@ public static class HashUtil
         return (char)(value < 10 ? ('0' + value) : ('a' + (value - 10)));
     }
 }
-

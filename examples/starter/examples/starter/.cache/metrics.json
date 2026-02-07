@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "ts": "2026-02-07T04:50:08.3709931\u002B00:00",
+  "site": {
+    "name": "starter",
+    "title": "SiteGen Starter",
+    "url": "https://example.com",
+    "baseUrl": "/",
+    "language": "zh-CN",
+    "defaultLanguage": null,
+    "languages": null
+  },
+  "outputDir": "C:\\Users\\AliSer\\Documents\\trae_projects\\ssp\\examples\\starter\\dist",
+  "contentItems": 5,
+  "variants": [
+    {
+      "language": "zh-CN",
+      "baseUrl": "/",
+      "outputDir": "C:\\Users\\AliSer\\Documents\\trae_projects\\ssp\\examples\\starter\\dist",
+      "routed": 5,
+      "derived": 7,
+      "rendered": 15,
+      "skipped": 0,
+      "reasons": {
+        "output_missing": 11,
+        "list_render": 3,
+        "content_changed": 1
+      },
+      "plugins": [
+        {
+          "name": "taxonomy",
+          "hook": "derive-pages",
+          "durationMs": 17,
+          "success": true,
+          "error": null
+        },
+        {
+          "name": "pagination",
+          "hook": "derive-pages",
+          "durationMs": 4,
+          "success": true,
+          "error": null
+        },
+        {
+          "name": "archive",
+          "hook": "derive-pages",
+          "durationMs": 1,
+          "success": true,
+          "error": null
+        },
+        {
+          "name": "taxonomy",
+          "hook": "after-build",
+          "durationMs": 7,
+          "success": true,
+          "error": null
+        },
+        {
+          "name": "sitemap",
+          "hook": "after-build",
+          "durationMs": 4,
+          "success": true,
+          "error": null
+        },
+        {
+          "name": "rss",
+          "hook": "after-build",
+          "durationMs": 6,
+          "success": true,
+          "error": null
+        },
+        {
+          "name": "search-index",
+          "hook": "after-build",
+          "durationMs": 5,
+          "success": true,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

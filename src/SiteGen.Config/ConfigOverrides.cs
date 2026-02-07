@@ -10,6 +10,7 @@ public sealed record ConfigOverrides
     public bool? Incremental { get; init; }
     public string? CacheDir { get; init; }
     public string? MetricsPath { get; init; }
+    public int? Jobs { get; init; }
 }
 
 public static class ConfigApplier

@@ -27,6 +27,8 @@ logging: {}
 | `site.title` | string | 是 | - | 站点标题（模板变量 `site.title`） |
 | `site.url` | string | 否 | null | 站点绝对 URL（用于 sitemap/rss）；必须以 `http://` 或 `https://` 开头 |
 | `site.description` | string | 否 | null | 站点描述（模板变量 `site.description`） |
+| `site.autoSummary` | bool | 否 | false | 未提供 `meta.summary` 时是否从正文提取摘要并回填 |
+| `site.autoSummaryMaxLength` | int | 否 | 200 | 自动摘要最大长度（字符数） |
 | `site.baseUrl` | string | 是 | `/` | GitHub Pages 子路径（例如 `/my-repo`）；必须以 `/` 开头 |
 | `site.outputPathEncoding` | string | 否 | `none` | `none` \| `slug` \| `urlencode` \| `sanitize`（`sanitize`：空格替换为 `-`，移除 `<>:"|?*` 和控制字符，连续 `-` 压缩，段末 `.`/空格移除） |
 | `site.language` | string | 否 | `zh-CN` | 单语言模式下的语言标识 |
@@ -72,6 +74,7 @@ content 支持两种模式：
 |---|---:|---:|---|---|
 | `databaseId` | string | 是 | - | Notion Database ID |
 | `pageSize` | int | 否 | 50 | Notion query page_size |
+| `maxItems` | int | 否 | null | 最多拉取条数（正整数）；达到即停止 |
 | `renderContent` | bool | 否 | null | 是否渲染正文；未设置时由内部策略决定（通常为 true） |
 | `fieldPolicy.mode` | string | 否 | `whitelist` | `whitelist` \| `all` |
 | `fieldPolicy.allowed` | string[] | 否 | null | whitelist 模式下允许进入 `page.fields` 的字段列表 |
@@ -79,10 +82,22 @@ content 支持两种模式：
 | `filterType` | string | 否 | `checkbox_true` | `checkbox_true` \| `none` |
 | `sortProperty` | string | 否 | null | 排序字段名 |
 | `sortDirection` | string | 否 | `ascending` | `ascending` \| `descending`（只有设置 sortProperty 才生效） |
+| `includeSlugs` | string[] | 否 | null | 指定 slug 列表，仅拉取这些页面（数据库 query 过滤） |
+| `includeSlugProperty` | string | 否 | `Slug` | includeSlugs 对应字段名（当前过滤使用 rich_text.equals） |
+| `cacheMode` | string | 否 | `off` | `off` \| `readwrite` \| `readonly`（Notion 正文渲染缓存） |
+| `cacheDir` | string | 否 | null | 缓存目录（相对 config 所在目录；不填时默认 `<rootDir>/.cache/notion`） |
+| `renderConcurrency` | int | 否 | null | 正文渲染并发度（正整数；默认本地 4、CI 2） |
+| `maxRps` | int | 否 | null | Notion 请求全局限速（正整数；默认 3，包含 query + blocks） |
+| `maxRetries` | int | 否 | null | 429 最大重试次数（非负整数；遵循 Retry-After 退避） |
 
 校验与运行时约束：
 - Notion token 必须来自环境变量：`NOTION_TOKEN`（缺失会直接报错）
 - filterType!=none 时，filterProperty 必须非空
+
+运行时观测：
+- Notion 内容源加载结束会输出 `event=notion.stats`，用于查看请求总数与限流等待情况：
+  - `requests`：Notion HTTP 请求总数（包含 query、blocks、429 重试）
+  - `throttle_wait_count` / `throttle_wait_ms`：因 `maxRps` 节流带来的等待次数/累计毫秒
 
 ### content.markdown / content.sources[].markdown
 
@@ -90,6 +105,9 @@ content 支持两种模式：
 |---|---:|---:|---|---|
 | `dir` | string | 否 | `content` | Markdown 内容目录（相对 config 所在目录） |
 | `defaultType` | string | 否 | `page` | 未指定 type 时的默认类型（page/post 等） |
+| `maxItems` | int | 否 | null | 最多读取多少篇（正整数；按路径排序后截断） |
+| `includePaths` | string[] | 否 | null | 只读取指定路径（相对 dir；可省略 `.md`） |
+| `includeGlobs` | string[] | 否 | null | 只读取匹配的 glob（匹配相对路径，分隔符使用 `/`） |
 
 ## build
 

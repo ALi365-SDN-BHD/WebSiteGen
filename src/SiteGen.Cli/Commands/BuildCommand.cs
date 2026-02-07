@@ -26,13 +26,32 @@ public static class BuildCommand
             IsCI = reader.HasFlag("--ci"),
             Incremental = reader.HasFlag("--incremental") ? true : reader.HasFlag("--no-incremental") ? false : null,
             CacheDir = reader.GetOption("--cache-dir"),
-            MetricsPath = reader.GetOption("--metrics")
+            MetricsPath = reader.GetOption("--metrics"),
+            Jobs = TryParsePositiveInt(reader.GetOption("--jobs"))
         };
+
+        Environment.SetEnvironmentVariable("SITEGEN_AUTO_SUMMARY", config.Site.AutoSummary ? "1" : "0");
+        Environment.SetEnvironmentVariable("SITEGEN_AUTO_SUMMARY_MAXLEN", config.Site.AutoSummaryMaxLength.ToString());
 
         var logger = new ConsoleLogger(ParseLogLevel(config.Logging.Level, overrides.IsCI), reader.GetOption("--log-format") ?? "text");
         var engine = new SiteEngine(logger);
         await engine.BuildAsync(config, resolved.RootDir, overrides);
         return 0;
+    }
+
+    private static int? TryParsePositiveInt(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (int.TryParse(text.Trim(), out var n) && n > 0)
+        {
+            return n;
+        }
+
+        return null;
     }
 
     private static LogLevel ParseLogLevel(string? level, bool isCi)

@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "ts": "2026-02-06T19:58:05.1758745\u002B00:00",
+  "site": {
+    "name": "starter",
+    "title": "SiteGen Starter",
+    "url": null,
+    "baseUrl": "/",
+    "language": "zh-CN",
+    "defaultLanguage": null,
+    "languages": null
+  },
+  "outputDir": "C:\\Users\\AliSer\\Documents\\trae_projects\\ssp\\examples\\starter\\dist",
+  "contentItems": 5,
+  "variants": [
+    {
+      "language": "zh-CN",
+      "baseUrl": "/",
+      "outputDir": "C:\\Users\\AliSer\\Documents\\trae_projects\\ssp\\examples\\starter\\dist",
+      "routed": 5,
+      "derived": 7,
+      "rendered": 4,
+      "skipped": 11,
+      "reasons": {
+        "content_changed": 4,
+        "list_unchanged": 3,
+        "unchanged": 8
+      },
+      "plugins": [
+        {
+          "Name": "taxonomy",
+          "Hook": "derive-pages",
+          "DurationMs": 14,
+          "Success": true,
+          "Error": null
+        },
+        {
+          "Name": "pagination",
+          "Hook": "derive-pages",
+          "DurationMs": 4,
+          "Success": true,
+          "Error": null
+        },
+        {
+          "Name": "archive",
+          "Hook": "derive-pages",
+          "DurationMs": 1,
+          "Success": true,
+          "Error": null
+        },
+        {
+          "Name": "taxonomy",
+          "Hook": "after-build",
+          "DurationMs": 6,
+          "Success": true,
+          "Error": null
+        },
+        {
+          "Name": "sitemap",
+          "Hook": "after-build",
+          "DurationMs": 0,
+          "Success": true,
+          "Error": null
+        },
+        {
+          "Name": "rss",
+          "Hook": "after-build",
+          "DurationMs": 0,
+          "Success": true,
+          "Error": null
+        },
+        {
+          "Name": "search-index",
+          "Hook": "after-build",
+          "DurationMs": 4,
+          "Success": true,
+          "Error": null
+        },
+        {
+          "Name": "sample-after-build",
+          "Hook": "after-build",
+          "DurationMs": 0,
+          "Success": true,
+          "Error": null
+        }
+      ]
+    }
+  ]
+}

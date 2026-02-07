@@ -45,6 +45,8 @@ public static class ConfigLoader
             Title = GetRequiredString(siteNode, "title"),
             Url = GetOptionalString(siteNode, "url"),
             Description = GetOptionalString(siteNode, "description"),
+            AutoSummary = GetOptionalBool(siteNode, "autoSummary") ?? false,
+            AutoSummaryMaxLength = GetOptionalInt(siteNode, "autoSummaryMaxLength") ?? 200,
             BaseUrl = GetOptionalString(siteNode, "baseUrl") ?? "/",
             OutputPathEncoding = GetOptionalString(siteNode, "outputPathEncoding") ?? "none",
             Language = GetOptionalString(siteNode, "language") ?? "zh-CN",
@@ -257,12 +259,20 @@ public static class ConfigLoader
         {
             DatabaseId = GetRequiredString(notionNode, "databaseId"),
             PageSize = GetOptionalInt(notionNode, "pageSize") ?? 50,
+            MaxItems = GetOptionalInt(notionNode, "maxItems"),
             RenderContent = GetOptionalBool(notionNode, "renderContent"),
+            RenderConcurrency = GetOptionalInt(notionNode, "renderConcurrency"),
+            MaxRps = GetOptionalInt(notionNode, "maxRps"),
+            MaxRetries = GetOptionalInt(notionNode, "maxRetries"),
             FieldPolicy = ReadNotionFieldPolicy(policyNode),
             FilterProperty = GetOptionalString(notionNode, "filterProperty") ?? "Published",
             FilterType = GetOptionalString(notionNode, "filterType") ?? "checkbox_true",
             SortProperty = GetOptionalString(notionNode, "sortProperty"),
-            SortDirection = GetOptionalString(notionNode, "sortDirection") ?? "ascending"
+            SortDirection = GetOptionalString(notionNode, "sortDirection") ?? "ascending",
+            IncludeSlugs = ReadStringList(notionNode, "includeSlugs"),
+            IncludeSlugProperty = GetOptionalString(notionNode, "includeSlugProperty") ?? "Slug",
+            CacheMode = GetOptionalString(notionNode, "cacheMode") ?? "off",
+            CacheDir = GetOptionalString(notionNode, "cacheDir")
         };
     }
 
@@ -286,7 +296,10 @@ public static class ConfigLoader
         return new MarkdownConfig
         {
             Dir = GetOptionalString(mdNode, "dir") ?? "content",
-            DefaultType = GetOptionalString(mdNode, "defaultType") ?? "page"
+            DefaultType = GetOptionalString(mdNode, "defaultType") ?? "page",
+            MaxItems = GetOptionalInt(mdNode, "maxItems"),
+            IncludePaths = ReadStringList(mdNode, "includePaths"),
+            IncludeGlobs = ReadStringList(mdNode, "includeGlobs")
         };
     }
 

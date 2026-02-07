@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IncludeSamplePlugins>false</IncludeSamplePlugins>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,7 +16,7 @@
     <ProjectReference Include="..\SiteGen.Shared\SiteGen.Shared.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(IncludeSamplePlugins)' == 'true'">
     <Compile Include="..\plugins\*\*.cs" />
   </ItemGroup>
 

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
 
@@ -125,14 +126,20 @@ public static class WebhookCommand
     private static async Task DispatchAsync(HttpClient http, string repo, string eventType)
     {
         var url = $"https://api.github.com/repos/{repo}/dispatches";
-        var payload = new
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
         {
-            event_type = eventType,
-            client_payload = new { source = "sitegen-webhook" }
-        };
+            writer.WriteStartObject();
+            writer.WriteString("event_type", eventType);
+            writer.WritePropertyName("client_payload");
+            writer.WriteStartObject();
+            writer.WriteString("source", "sitegen-webhook");
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
 
-        var json = JsonSerializer.Serialize(payload);
-        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        using var content = new ByteArrayContent(buffer.WrittenSpan.ToArray());
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         using var res = await http.PostAsync(url, content);
 
         if (!res.IsSuccessStatusCode)
@@ -167,4 +174,3 @@ public static class WebhookCommand
         return trimmed;
     }
 }
-

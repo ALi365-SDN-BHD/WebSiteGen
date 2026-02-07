@@ -56,6 +56,8 @@ logging:
 | `site.defaultLanguage` | 多语言下的默认语言 | `zh-CN` |
 | `site.timezone` | 时区（影响日期展示与一些默认行为） | `Asia/Shanghai` |
 | `site.pluginFailMode` | 插件失败策略 | `strict` / `warn` |
+| `site.autoSummary` | 未提供 summary 时是否从正文提取摘要 | `true` / `false` |
+| `site.autoSummaryMaxLength` | 自动摘要最大长度（字符数） | `200` |
 
 与输出相关的模式（多语言时很关键）：
 
@@ -66,6 +68,16 @@ logging:
 | `site.searchMode` | search 输出模式 | `merged` / `split` / `index` |
 
 这些模式怎么选见：[11-多语言与SEO](./11-多语言与SEO.md)。
+
+### site：自动摘要（可选）
+
+当文章没有提供 `summary` 时，可以开启“自动摘要”从正文内容提取一段纯文本作为摘要，并写入 `meta.summary`，因此 taxonomy/RSS/search.json/模板里读取 `summary` 都能拿到值。
+
+```yaml
+site:
+  autoSummary: true
+  autoSummaryMaxLength: 200
+```
 
 ### content：内容来源（Markdown / Notion / 多源）
 
@@ -89,6 +101,9 @@ content:
 |---|---|---|
 | `content.markdown.dir` | Markdown 根目录 | 递归读取 `*.md` |
 | `content.markdown.defaultType` | 未声明 type 时默认类型 | 常用 `page` |
+| `content.markdown.maxItems` | 最多读取多少篇 | 正整数；用于大仓库限额 |
+| `content.markdown.includePaths` | 只读取指定路径 | 相对 `content.markdown.dir`；可省略 `.md` |
+| `content.markdown.includeGlobs` | 只读取匹配的 glob | 匹配相对路径，分隔符使用 `/` |
 
 Markdown 内容写法见：[05-内容-Markdown](./05-内容-Markdown.md)。
 
@@ -111,6 +126,17 @@ content:
         - seo_desc
         - cover
 ```
+
+| 字段 | 作用 | 说明 |
+|---|---|---|
+| `content.notion.maxItems` | 最多拉取多少条 | 正整数；用于大库限额 |
+| `content.notion.includeSlugs` | 只拉取指定 slug | 数据库 query 过滤（便于单篇调试） |
+| `content.notion.includeSlugProperty` | includeSlugs 对应字段 | 默认 `Slug`；建议 rich_text |
+| `content.notion.cacheMode` | Notion 渲染缓存模式 | `off`/`readwrite`/`readonly` |
+| `content.notion.cacheDir` | 缓存目录 | 相对 config 所在目录；不填时默认 `<rootDir>/.cache/notion` |
+| `content.notion.renderConcurrency` | 正文渲染并发度 | 正整数；默认本地 4、CI 2 |
+| `content.notion.maxRps` | Notion 请求全局限速 | 正整数；默认 3（包含数据库 query + blocks children） |
+| `content.notion.maxRetries` | 429 最大重试次数 | 非负整数；遵循 `Retry-After` 退避 |
 
 Notion 模式的前提：
 

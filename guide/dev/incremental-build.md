@@ -13,6 +13,7 @@
 - CLI：
   - `--incremental` / `--no-incremental`
   - `--cache-dir <dir>`（默认 `<rootDir>/.cache`）
+  - `--jobs <n>`：控制渲染并行度（默认 CPU 核心数；与增量判定独立）
 
 缓存目录与 clean 的关系见：[缓存与清理](./cache-clean.md)。
 
@@ -34,6 +35,10 @@ manifest 用于记录“上次渲染时的指纹”，默认路径：
    - `ContentHash`：内容指纹（ContentItem 的关键字段 + fields + ContentHtml）
    - `RouteHash`：路由指纹（url/outputPath/template）
 
+补充：
+
+- 首页与列表页（例如 `index.html`、`blog/index.html`、`pages/index.html`）也会写入 manifest，并参与增量判定。
+
 ## renderReasons（诊断意义）
 
 当需要渲染时，引擎会记录原因统计（写入 metrics 时可见）：
@@ -43,6 +48,12 @@ manifest 用于记录“上次渲染时的指纹”，默认路径：
 - `content_changed`：内容指纹变化
 - `route_changed`：路由指纹变化
 - `full_render`：关闭增量时的全量渲染
+
+当页面被跳过/或是列表页的增量判定时，可能还会看到：
+
+- `unchanged`：内容页命中增量缓存而跳过
+- `list_render`：列表页需要重渲染
+- `list_unchanged`：列表页命中增量缓存而跳过
 
 ## 常见问题与排查
 

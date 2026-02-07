@@ -71,7 +71,8 @@ content:
 |---|---|---|
 | `SEO Title` | rich_text | `page.fields.seo_title.value` |
 | `SEO Desc` | rich_text | `page.fields.seo_desc.value` |
-| `cover` | files / url | 封面图 |
+| `cover` | files / url | 封面图（`page.fields.cover.value`） |
+| `My Link` | url | 链接（`page.fields.my_link.value`） |
 | `reading_time` | number | 阅读时长 |
 
 ## 模拟数据（示例数据库表）
@@ -115,9 +116,121 @@ content:
     sortDirection: descending
 ```
 
+## 限额、指定拉取与缓存（大库/减少 Notion 请求）
+
+### 1）maxItems：限制最多拉取条数
+
+```yaml
+content:
+  provider: notion
+  notion:
+    databaseId: "..."
+    maxItems: 5000
+```
+
+### 2）includeSlugs：只拉取指定 slug 的页面
+
+```yaml
+content:
+  provider: notion
+  notion:
+    databaseId: "..."
+    includeSlugProperty: Slug
+    includeSlugs: [about, first-post]
+```
+
+说明：
+
+- `includeSlugs` 会在 Notion 数据库 query 阶段做过滤（不是本地过滤），适合“只调试几篇文章/只构建部分站点”。
+- 当前过滤使用 `rich_text.equals`，因此 `includeSlugProperty` 对应字段应为 rich_text 类型；如果你的 Slug 用的是 formula/string，请新增一个 rich_text 字段用于过滤。
+
+### 3）cacheMode/cacheDir：缓存正文渲染结果
+
+当 `renderContent=true` 时，引擎会读取 Notion block 并渲染 HTML。对大库或 CI 场景，可以启用磁盘缓存：
+
+```yaml
+content:
+  provider: notion
+  notion:
+    databaseId: "..."
+    cacheMode: readwrite   # off | readwrite | readonly
+    cacheDir: .cache/notion
+```
+
+行为说明：
+
+- `off`：不使用缓存（默认）
+- `readwrite`：缓存命中则复用；未命中会请求 Notion 并写入缓存
+- `readonly`：只读缓存；未命中会报错（适合“强制离线/强制不打 Notion API”的 CI）
+
+### 4）renderConcurrency/maxRps/maxRetries：并发渲染与限流（首轮构建提速）
+
+当页面很多、且需要渲染正文时（blocks API 调用会很密集），推荐开启“受控并发 + 全局限流”来把吞吐稳定在 Notion 的 request limit 附近，并减少 429：
+
+```yaml
+content:
+  provider: notion
+  notion:
+    databaseId: "..."
+    renderConcurrency: 4
+    maxRps: 3
+    maxRetries: 5
+```
+
+说明：
+
+- `renderConcurrency`：同时渲染多少个页面的正文（越大越能隐藏网络 RTT，但 CPU/内存占用也会升高）。
+- `maxRps`：对本内容源的所有 Notion HTTP 请求做全局限速（包括数据库 query + blocks children），默认建议 3。
+- `maxRetries`：遇到 429 时的最大重试次数，会遵循 `Retry-After` 退避等待。
+
+### 5）notion.stats：构建时的请求/节流统计日志
+
+当你开启了 `maxRps`（或触发 429 重试）后，建议关注 Notion 内容源在构建结束时输出的一行统计日志：
+
+```
+event=notion.stats requests=1234 throttle_wait_count=56 throttle_wait_ms=7890
+```
+
+字段含义：
+
+- `requests`：Notion HTTP 请求总数（包含数据库 query、blocks children、以及 429 重试产生的额外请求）
+- `throttle_wait_count`：因 `maxRps` 限流而发生的等待次数
+- `throttle_wait_ms`：因 `maxRps` 限流而发生的累计等待时长（毫秒）
+
 ## fieldPolicy：哪些 Notion 字段会进入 page.fields
 
 Notion 的 properties 很多时候并不都需要进入模板。你可以用 `fieldPolicy` 控制：
+
+## 支持的 Notion 字段类型（进入 page.fields）
+
+当字段被 `fieldPolicy` 允许后，会按 Notion 字段类型映射到 `page.fields.<key>.type/value`：
+
+| Notion 字段类型 | 模板字段类型（page.fields.<key>.type） | value 形态 |
+|---|---|---|
+| `title` | `text` | string |
+| `rich_text` | `text` | string |
+| `url` | `text` | string（URL） |
+| `email` | `text` | string |
+| `phone_number` | `text` | string |
+| `number` | `number` | number |
+| `checkbox` | `bool` | bool |
+| `date` | `date` | date |
+| `created_time` | `date` | date |
+| `last_edited_time` | `date` | date |
+| `created_by` | `text` | string（用户名或id） |
+| `last_edited_by` | `text` | string（用户名或id） |
+| `select` | `text` | string |
+| `status` | `text` | string |
+| `multi_select` | `list` | string[] |
+| `people` | `list` | string[]（用户名或id） |
+| `relation` | `list` | string[]（关联页面id） |
+| `files` | `file` | string（文件URL） |
+| `formula` | `text/number/bool/date` | 取决于公式类型 |
+| `rollup` | `number/date/list` | 取决于 rollup 类型 |
+| `unique_id` | `text` | string（prefix-number） |
+| `verification` | `text` | string（state） |
+
+提示：如果你只是想在模板里读取一个链接，建议不要把字段名命名为 `Url`（归一化后为 `url`），避免与“路由覆盖字段”混淆。
 
 ### 白名单（推荐：可控、安全、模板更稳定）
 
@@ -133,6 +246,7 @@ content:
         - seo_desc
         - cover
         - reading_time
+        - my_link
 ```
 
 ### 全量（调试方便，但字段变化更容易影响模板）
@@ -150,6 +264,11 @@ content:
 
 - Notion 侧字段名尽量稳定
 - 模板侧统一用“下划线小写”访问（`page.fields.seo_title`）
+
+注意：
+
+- Notion 的 `url` 类型字段会进入 `page.fields.<key>.value`，值是字符串 URL。
+- 如果你把字段名命名为 `Url`（归一化后为 `url`），它会同时被用作“路由覆盖字段”（影响该页面的最终 URL）。如果你只是想在模板里拿一个链接，建议用别的名字（例如 `My Link`）。
 
 ## 常见错误与修复
 

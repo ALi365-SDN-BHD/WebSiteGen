@@ -1,12 +1,17 @@
 using SiteGen.Shared;
 using System.Globalization;
+using System.Net;
+using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
 
 namespace SiteGen.Content.Markdown;
 
 public sealed record MarkdownFolderProviderOptions(
     string ContentDir,
-    string DefaultType = "page"
+    string DefaultType = "page",
+    int? MaxItems = null,
+    IReadOnlyList<string>? IncludePaths = null,
+    IReadOnlyList<string>? IncludeGlobs = null
 );
 
 public sealed class MarkdownFolderProvider : IContentProvider
@@ -33,6 +38,50 @@ public sealed class MarkdownFolderProvider : IContentProvider
         var files = Directory.GetFiles(_options.ContentDir, "*.md", SearchOption.AllDirectories)
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        if (_options.IncludePaths is { Count: > 0 })
+        {
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in _options.IncludePaths)
+            {
+                if (string.IsNullOrWhiteSpace(p))
+                {
+                    continue;
+                }
+
+                var rel = p.Trim().Replace('/', Path.DirectorySeparatorChar);
+                if (!rel.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                {
+                    rel += ".md";
+                }
+
+                var full = Path.GetFullPath(Path.Combine(_options.ContentDir, rel));
+                allowed.Add(full);
+            }
+
+            files = files.Where(f => allowed.Contains(Path.GetFullPath(f))).ToArray();
+        }
+
+        if (_options.IncludeGlobs is { Count: > 0 } globs)
+        {
+            var regexes = globs.Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => BuildGlobRegex(x.Trim()))
+                .ToList();
+
+            if (regexes.Count > 0)
+            {
+                files = files.Where(f =>
+                {
+                    var rel = Path.GetRelativePath(_options.ContentDir, f).Replace('\\', '/');
+                    return regexes.Any(r => r.IsMatch(rel));
+                }).ToArray();
+            }
+        }
+
+        if (_options.MaxItems is > 0)
+        {
+            files = files.Take(_options.MaxItems.Value).ToArray();
+        }
 
         var items = new List<ContentItem>(capacity: files.Length);
         foreach (var file in files)
@@ -71,6 +120,19 @@ public sealed class MarkdownFolderProvider : IContentProvider
 
             var html = BasicMarkdownToHtml.Convert(bodyMarkdown);
 
+            if (!meta.TryGetValue("summary", out var summaryObj) || string.IsNullOrWhiteSpace(summaryObj?.ToString()))
+            {
+                if (IsAutoSummaryEnabled())
+                {
+                    var maxLen = GetAutoSummaryMaxLength();
+                    var extracted = ExtractSummaryFromHtml(html, maxLen);
+                    if (!string.IsNullOrWhiteSpace(extracted))
+                    {
+                        meta["summary"] = extracted;
+                    }
+                }
+            }
+
             var publishAt = File.GetLastWriteTimeUtc(file);
             if (meta.TryGetValue("publishAt", out var publishObj) && publishObj is string publishText && TryParseDateTimeOffset(publishText, out var dto))
             {
@@ -91,6 +153,162 @@ public sealed class MarkdownFolderProvider : IContentProvider
         }
 
         return Task.FromResult<IReadOnlyList<ContentItem>>(items);
+    }
+
+    private static Regex BuildGlobRegex(string glob)
+    {
+        var pattern = glob.Replace('\\', '/');
+        var sb = new System.Text.StringBuilder(pattern.Length * 2);
+        sb.Append("^");
+
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var ch = pattern[i];
+            if (ch == '*')
+            {
+                var isDouble = i + 1 < pattern.Length && pattern[i + 1] == '*';
+                if (isDouble)
+                {
+                    sb.Append(".*");
+                    i++;
+                }
+                else
+                {
+                    sb.Append("[^/]*");
+                }
+                continue;
+            }
+
+            if (ch == '?')
+            {
+                sb.Append("[^/]");
+                continue;
+            }
+
+            if ("+()^$.{}[]|\\".IndexOf(ch) >= 0)
+            {
+                sb.Append('\\');
+            }
+
+            sb.Append(ch);
+        }
+
+        sb.Append("$");
+        return new Regex(sb.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static bool IsAutoSummaryEnabled()
+    {
+        var raw = Environment.GetEnvironmentVariable("SITEGEN_AUTO_SUMMARY") ?? string.Empty;
+        raw = raw.Trim();
+        return raw is "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase) || raw.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int GetAutoSummaryMaxLength()
+    {
+        var raw = (Environment.GetEnvironmentVariable("SITEGEN_AUTO_SUMMARY_MAXLEN") ?? string.Empty).Trim();
+        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n > 0)
+        {
+            return n;
+        }
+
+        return 200;
+    }
+
+    private static string ExtractSummaryFromHtml(string html, int maxLength)
+    {
+        if (maxLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        var text = StripHtmlToText(html);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        return TruncateAtWordBoundary(text, maxLength);
+    }
+
+    private static string StripHtmlToText(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return string.Empty;
+        }
+
+        var sb = new System.Text.StringBuilder(html.Length);
+        var inTag = false;
+        for (var i = 0; i < html.Length; i++)
+        {
+            var ch = html[i];
+            if (ch == '<')
+            {
+                inTag = true;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                inTag = false;
+                sb.Append(' ');
+                continue;
+            }
+
+            if (!inTag)
+            {
+                sb.Append(ch);
+            }
+        }
+
+        var decoded = WebUtility.HtmlDecode(sb.ToString());
+        return CollapseWhitespace(decoded);
+    }
+
+    private static string CollapseWhitespace(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        var lastWasSpace = false;
+        foreach (var ch in text)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!lastWasSpace)
+                {
+                    sb.Append(' ');
+                    lastWasSpace = true;
+                }
+                continue;
+            }
+
+            sb.Append(ch);
+            lastWasSpace = false;
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static string TruncateAtWordBoundary(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        var cut = text.LastIndexOf(' ', maxLength);
+        if (cut < maxLength / 2)
+        {
+            cut = maxLength;
+        }
+
+        var trimmed = text[..cut].TrimEnd();
+        return string.IsNullOrWhiteSpace(trimmed) ? string.Empty : trimmed + "…";
     }
 
     private static string? ExtractTitle(string markdown)

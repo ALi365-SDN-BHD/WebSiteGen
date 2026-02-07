@@ -1,30 +1,46 @@
 {
   "version": 1,
-  "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234",
+  "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f",
   "entries": {
+    "blog/index.html": {
+      "outputPath": "blog/index.html",
+      "url": "/blog/",
+      "template": "pages/list.html",
+      "contentHash": "79c0add761dc5cfeaf93cdefc336f3691bae3bd808bf84dc8ad2977f766e095b",
+      "routeHash": "6333e74bdaf5c8efbdfd0359162be405903ab9b3621e66f607714b2a28b30332",
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
+    },
     "categories/docs/index.html": {
       "outputPath": "categories/docs/index.html",
       "url": "/categories/docs/",
-      "template": "pages/page.html",
-      "contentHash": "1eac44e640b787b49e4040fabf134b7a2f7da5495a87789ec5111b3e1bf3898f",
-      "routeHash": "b47ed64858f1008c45538e12d5fc7117f1f15a2a8b251e1f7dbabaff02e7b092",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "template": "pages/category.html",
+      "contentHash": "673366121c2152417423fdf55c1772a82a5dcd1286ea3a69573ef4cc6ee44999",
+      "routeHash": "95d7b31e4c1092efc7c3d70a600cd28e6bdcf4432029a77674181980e6ea799f",
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "categories/index.html": {
       "outputPath": "categories/index.html",
       "url": "/categories/",
       "template": "pages/page.html",
-      "contentHash": "2cc9fcd820bd0c6f838b990b9551eb35e9acfabce93c1510573ac1adeb74de09",
+      "contentHash": "d54eb30b300db54b4f14b425b80b7f4eaa3b18c12e2ecb4c3f513712b270cba5",
       "routeHash": "2a9ee5d91402c4a7a9bd9a8ddb918b5d7942a30f6364d92edd8667d2d5ea5c9f",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
+    },
+    "index.html": {
+      "outputPath": "index.html",
+      "url": "/",
+      "template": "pages/index.html",
+      "contentHash": "4fb8880073360ff24740350a464fbf6d00b5e77ae68691aa60a495a8ad618219",
+      "routeHash": "d57b29de6f443a07465d6060476e756c7e6ea2ffc8d735d64b3fa9ee74aec770",
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "pages/about/index.html": {
       "outputPath": "pages/about/index.html",
       "url": "/pages/about/",
       "template": "pages/page.html",
-      "contentHash": "c8c17109be2ced95543cfb27d2e95fcf666afa94651c260b3628110b85a06cdc",
+      "contentHash": "9ca6cd8da5390f711a79ea7438d263b2385f1c49a259c94d2650763da82d2e6c",
       "routeHash": "36f26401863d7bedaccee2637083b92ae0af9fc9ac57d81ccec13ae7b6cd55db",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "pages/greeting/index.html": {
       "outputPath": "pages/greeting/index.html",
@@ -32,7 +48,7 @@
       "template": "pages/page.html",
       "contentHash": "78c63cb2bdff9e30aef504d837cf0615aa398cd571655a2c7dcc10cb43056aad",
       "routeHash": "f386734ada522182ff2f289808b13f4763039bf3717fc4d9a3f1786568abc077",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "pages/hello-en/index.html": {
       "outputPath": "pages/hello-en/index.html",
@@ -40,15 +56,23 @@
       "template": "pages/page.html",
       "contentHash": "04048aa44ee72c4a1fff470f3727829f72c1c8c0d135e8050441d0bdaac1e2fe",
       "routeHash": "e1804584be99afb493524050f1a7ed54155ccb7f24bf79f0a9543833aa7ce124",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "pages/hello-world/index.html": {
       "outputPath": "pages/hello-world/index.html",
       "url": "/pages/hello-world/",
       "template": "pages/page.html",
-      "contentHash": "e5ca74292cf75e3389be4180205e9ee5debab96ade5feaf120a7c60ae04ad126",
+      "contentHash": "27d66e20ca736ab88f1f58d877692f03d37482d6fe98fa95a9907664eaa6aa80",
       "routeHash": "244d5372a244a024e8fcbc1dca087ad95795265439f351caf876520cc24da734",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
+    },
+    "pages/index.html": {
+      "outputPath": "pages/index.html",
+      "url": "/pages/",
+      "template": "pages/list.html",
+      "contentHash": "786c11d57ae7949554a03d287f8bd8ecb37cdb061a59e87124765e364c4d7f9f",
+      "routeHash": "1ea0060eb6dbebbaa61f6bcd7f502337fcad563d26927e24b9cf58469ee861f5",
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "tags/demo/index.html": {
       "outputPath": "tags/demo/index.html",
@@ -56,7 +80,7 @@
       "template": "pages/page.html",
       "contentHash": "d48c09cef37f264e2225b6b3d7616153c05632973320540c315b1210f7fe4e6e",
       "routeHash": "1a9b0d79349d0a8fdc950e64b4f9d22f1376d1bea5d64c187427cba1250dcf7b",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "tags/english/index.html": {
       "outputPath": "tags/english/index.html",
@@ -64,31 +88,31 @@
       "template": "pages/page.html",
       "contentHash": "319bf7d7d0632c3cb6fbedf832620b1d0ff2ab213c2c8c718980070c75da4721",
       "routeHash": "c2d45b47d6f817a9f7b695db4e6c9b7029e0af165f86965dbfa9b85f4bb89790",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "tags/index.html": {
       "outputPath": "tags/index.html",
       "url": "/tags/",
       "template": "pages/page.html",
-      "contentHash": "b1ae192bd876486d2870bdd2a9c43b8014c06e4d2b5ec9508d9b1553c8fd2880",
+      "contentHash": "634eae317c8588394bf54afb93d7b1a55a5396ffa1ffb50cd73c861a2b69d2fa",
       "routeHash": "b60552624b1a7f3f5eba58697806aaa0ec5207a4aeffe66c0152a2588e4f5066",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "tags/sitegen/index.html": {
       "outputPath": "tags/sitegen/index.html",
       "url": "/tags/sitegen/",
       "template": "pages/page.html",
-      "contentHash": "dd3c5a86b736841eb262ca390093663f95bae7d4cbe797cd16d8af175a74b274",
+      "contentHash": "c114981b17e37acead2daca1c4ebc0ecfb7feb7c890a7f8fd1f8766f821e12ec",
       "routeHash": "a9833c54a986d3d98ba9340012a0f134c232a19fe215b83a2f94f0ac66fd9247",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
     "tags/starter/index.html": {
       "outputPath": "tags/starter/index.html",
       "url": "/tags/starter/",
       "template": "pages/page.html",
-      "contentHash": "2a447191444d7f00d005b92ff854b9078575cd7a69273127e208e5fa4e30a4c5",
+      "contentHash": "f1be4d48cccb7df3bde969bdc61b6532109ec2750180183fc544c6d660d6329d",
       "routeHash": "10179fd15896c0c28aa51855d359e4398d60c45aff258eabc97cc9e166bcc0e7",
-      "templateHash": "c9a8a4921a787cd0ae29576699b7a0e563dd74028b6c01eb6bd86b89ec819234"
+      "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     }
   }
 }

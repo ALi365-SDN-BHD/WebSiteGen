@@ -33,11 +33,7 @@ public sealed class SearchIndexPlugin : ISiteGenPlugin, IAfterBuildPlugin
                 writer.WriteString("summary", summary.ToString());
             }
 
-            var text = StripHtml(item.ContentHtml);
-            if (text.Length > 8000)
-            {
-                text = text[..8000];
-            }
+            var text = StripHtml(item.ContentHtml, 8000);
 
             writer.WriteString("content", text);
             writer.WriteString("type", GetString(item.Meta, "type"));
@@ -93,14 +89,14 @@ public sealed class SearchIndexPlugin : ISiteGenPlugin, IAfterBuildPlugin
         return b + u;
     }
 
-    private static string StripHtml(string html)
+    private static string StripHtml(string html, int maxChars)
     {
-        if (string.IsNullOrWhiteSpace(html))
+        if (maxChars <= 0 || string.IsNullOrWhiteSpace(html))
         {
             return string.Empty;
         }
 
-        var sb = new StringBuilder(html.Length);
+        var sb = new StringBuilder(Math.Min(html.Length, maxChars));
         var inside = false;
         for (var i = 0; i < html.Length; i++)
         {
@@ -114,17 +110,26 @@ public sealed class SearchIndexPlugin : ISiteGenPlugin, IAfterBuildPlugin
             if (c == '>')
             {
                 inside = false;
-                sb.Append(' ');
+                if (sb.Length < maxChars)
+                {
+                    sb.Append(' ');
+                }
                 continue;
             }
 
             if (!inside)
             {
+                if (sb.Length >= maxChars)
+                {
+                    break;
+                }
+
                 sb.Append(c);
             }
         }
 
-        return sb.ToString().ReplaceLineEndings(" ").Trim();
+        var text = sb.ToString().ReplaceLineEndings(" ").Trim();
+        return text.Length > maxChars ? text[..maxChars] : text;
     }
 
     private static string? GetString(IReadOnlyDictionary<string, object> meta, string key)

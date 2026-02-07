@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using System.Net;
+using System.Buffers;
 using SiteGen.Shared;
 
 namespace SiteGen.Content.Notion;
@@ -7,10 +9,12 @@ namespace SiteGen.Content.Notion;
 public sealed class NotionContentProvider : IContentProvider
 {
     private readonly NotionProviderOptions _options;
+    private readonly ILogger? _logger;
 
-    public NotionContentProvider(NotionProviderOptions options)
+    public NotionContentProvider(NotionProviderOptions options, ILogger? logger = null)
     {
         _options = options;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<ContentItem>> LoadAsync(CancellationToken cancellationToken = default)
@@ -28,88 +32,268 @@ public sealed class NotionContentProvider : IContentProvider
         using var client = new NotionApiClient(_options);
         var renderer = new NotionBlocksRenderer(client);
 
-        var items = new List<ContentItem>();
+        var drafts = new List<PageDraft>();
+        var maxItems = _options.MaxItems is > 0 ? _options.MaxItems : null;
         var policyMode = NormalizePolicyMode(_options.FieldPolicyMode);
         var allowed = policyMode == "whitelist" ? BuildAllowedSet(_options.AllowedFields) : null;
-        var (resolvedFilterProperty, resolvedSortProperty) = await ResolveDatabasePropertyNamesAsync(client, _options, cancellationToken);
+        var (resolvedFilterProperty, resolvedSortProperty, resolvedIncludeSlugProperty) = await ResolveDatabasePropertyNamesAsync(client, _options, cancellationToken);
         string? startCursor = null;
+        var pageHtmlCache = CreatePageHtmlCache(_options);
 
-        while (true)
+        try
         {
-            var query = BuildDatabaseQueryJson(_options, startCursor, resolvedFilterProperty, resolvedSortProperty);
-            using var doc = await client.PostAsync($"https://api.notion.com/v1/databases/{_options.DatabaseId}/query", query, cancellationToken);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("results", out var results) || results.ValueKind != JsonValueKind.Array)
+            while (true)
             {
-                throw new ContentException("Notion query response missing results.");
-            }
+                var query = BuildDatabaseQueryJson(_options, startCursor, resolvedFilterProperty, resolvedSortProperty, resolvedIncludeSlugProperty);
+                using var doc = await client.PostAsync($"https://api.notion.com/v1/databases/{_options.DatabaseId}/query", query, cancellationToken);
+                var root = doc.RootElement;
 
-            foreach (var page in results.EnumerateArray())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var pageId = GetString(page, "id");
-                if (string.IsNullOrWhiteSpace(pageId))
+                if (!root.TryGetProperty("results", out var results) || results.ValueKind != JsonValueKind.Array)
                 {
-                    continue;
+                    throw new ContentException("Notion query response missing results.");
                 }
 
-                var props = page.TryGetProperty("properties", out var p) && p.ValueKind == JsonValueKind.Object ? p : default;
-                EnsureNoCaseInsensitiveConflicts(props, pageId);
-                var title = ExtractTitle(props) ?? pageId;
-                var slug = ExtractSlug(props) ?? Slugify(title) ?? pageId.Replace("-", string.Empty, StringComparison.Ordinal);
-                var type = ExtractType(props) ?? "post";
-                var publishAt = ExtractPublishAt(props) ?? DateTimeOffset.UtcNow;
-
-                var contentHtml = _options.RenderContent
-                    ? await renderer.RenderPageAsync(pageId, cancellationToken)
-                    : string.Empty;
-
-                var meta = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+                var hitMax = false;
+                foreach (var page in results.EnumerateArray())
                 {
-                    ["type"] = type,
-                    ["source"] = "notion",
-                    ["notionPageId"] = pageId
-                };
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                var fields = ExtractFields(props, policyMode, allowed);
-                PromoteFieldToMeta(fields, meta, "language", "language");
-                PromoteFieldToMeta(fields, meta, "i18n_key", "i18nKey");
-                PromoteFieldToMeta(fields, meta, "i18nkey", "i18nKey");
-                PromoteFieldToMeta(fields, meta, "url", "url");
-                PromoteFieldToMeta(fields, meta, "outputpath", "outputPath");
-                PromoteFieldToMeta(fields, meta, "template", "template");
-                PromoteTaxonomyFieldToMeta(fields, meta, "tags");
-                PromoteTaxonomyFieldToMeta(fields, meta, "categories");
+                    if (maxItems is not null && drafts.Count >= maxItems.Value)
+                    {
+                        hitMax = true;
+                        break;
+                    }
 
-                items.Add(new ContentItem(
-                    Id: pageId,
-                    Title: title,
-                    Slug: slug,
-                    PublishAt: publishAt,
-                    ContentHtml: contentHtml,
-                    Meta: meta,
-                    Fields: fields
-                ));
-            }
+                    var pageId = GetString(page, "id");
+                    if (string.IsNullOrWhiteSpace(pageId))
+                    {
+                        continue;
+                    }
 
-            if (root.TryGetProperty("has_more", out var hasMoreEl) && hasMoreEl.ValueKind == JsonValueKind.True)
-            {
-                startCursor = GetString(root, "next_cursor");
-                if (string.IsNullOrWhiteSpace(startCursor))
+                    var props = page.TryGetProperty("properties", out var p) && p.ValueKind == JsonValueKind.Object ? p : default;
+                    EnsureNoCaseInsensitiveConflicts(props, pageId);
+                    var title = ExtractTitle(props) ?? pageId;
+                    var slug = ExtractSlug(props) ?? Slugify(title) ?? pageId.Replace("-", string.Empty, StringComparison.Ordinal);
+                    var type = ExtractType(props) ?? "post";
+                    var publishAt = ExtractPublishAt(props) ?? DateTimeOffset.UtcNow;
+
+                    var lastEditedTime = GetString(page, "last_edited_time");
+
+                    var meta = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["type"] = type,
+                        ["source"] = "notion",
+                        ["notionPageId"] = pageId
+                    };
+
+                    var fields = ExtractFields(props, policyMode, allowed);
+                    PromoteFieldToMeta(fields, meta, "language", "language");
+                    PromoteFieldToMeta(fields, meta, "i18n_key", "i18nKey");
+                    PromoteFieldToMeta(fields, meta, "i18nkey", "i18nKey");
+                    PromoteFieldToMeta(fields, meta, "url", "url");
+                    PromoteFieldToMeta(fields, meta, "outputpath", "outputPath");
+                    PromoteFieldToMeta(fields, meta, "template", "template");
+                    PromoteFieldToMeta(fields, meta, "summary", "summary");
+                    PromoteTaxonomyFieldToMeta(fields, meta, "tags");
+                    PromoteTaxonomyFieldToMeta(fields, meta, "categories");
+
+                    drafts.Add(new PageDraft(pageId, title, slug, type, publishAt, lastEditedTime, meta, fields));
+                }
+
+                if (hitMax)
                 {
                     break;
                 }
 
-                continue;
+                if (root.TryGetProperty("has_more", out var hasMoreEl) && hasMoreEl.ValueKind == JsonValueKind.True)
+                {
+                    startCursor = GetString(root, "next_cursor");
+                    if (string.IsNullOrWhiteSpace(startCursor))
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                break;
+            }
+        }
+        finally
+        {
+            var stats = client.GetStats();
+            _logger?.Info($"event=notion.stats requests={stats.RequestCount} throttle_wait_count={stats.ThrottleWaitCount} throttle_wait_ms={stats.ThrottleWaitTotalMs}");
+        }
+
+        var contentHtmls = new string[drafts.Count];
+        if (_options.RenderContent)
+        {
+            var concurrency = _options.RenderConcurrency is > 0 ? _options.RenderConcurrency.Value : 4;
+            using var sem = new SemaphoreSlim(concurrency, concurrency);
+            var tasks = new Task[drafts.Count];
+            for (var i = 0; i < drafts.Count; i++)
+            {
+                tasks[i] = RenderOneAsync(i);
             }
 
-            break;
+            await Task.WhenAll(tasks);
+
+            async Task RenderOneAsync(int idx)
+            {
+                await sem.WaitAsync(cancellationToken);
+                try
+                {
+                    var d = drafts[idx];
+                    contentHtmls[idx] = await GetOrRenderPageHtmlAsync(renderer, pageHtmlCache, d.PageId, d.LastEditedTime, cancellationToken);
+                }
+                finally
+                {
+                    sem.Release();
+                }
+            }
+        }
+
+        var items = new List<ContentItem>(drafts.Count);
+        for (var i = 0; i < drafts.Count; i++)
+        {
+            var d = drafts[i];
+            var contentHtml = contentHtmls[i] ?? string.Empty;
+
+            if (!d.Meta.TryGetValue("summary", out var summaryObj) || string.IsNullOrWhiteSpace(summaryObj?.ToString()))
+            {
+                if (IsAutoSummaryEnabled() && !string.IsNullOrWhiteSpace(contentHtml))
+                {
+                    var maxLen = GetAutoSummaryMaxLength();
+                    var extracted = ExtractSummaryFromHtml(contentHtml, maxLen);
+                    if (!string.IsNullOrWhiteSpace(extracted))
+                    {
+                        d.Meta["summary"] = extracted;
+                    }
+                }
+            }
+
+            items.Add(new ContentItem(
+                Id: d.PageId,
+                Title: d.Title,
+                Slug: d.Slug,
+                PublishAt: d.PublishAt,
+                ContentHtml: contentHtml,
+                Meta: d.Meta,
+                Fields: d.Fields
+            ));
         }
 
         return items;
     }
+
+    private sealed record PageDraft(
+        string PageId,
+        string Title,
+        string Slug,
+        string Type,
+        DateTimeOffset PublishAt,
+        string? LastEditedTime,
+        Dictionary<string, object> Meta,
+        IReadOnlyDictionary<string, ContentField> Fields);
+
+    private static PageHtmlCache? CreatePageHtmlCache(NotionProviderOptions options)
+    {
+        var mode = NormalizeCacheMode(options.CacheMode);
+        if (mode == "off")
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.CacheDir))
+        {
+            return null;
+        }
+
+        var root = options.CacheDir!.Trim();
+        var pagesDir = Path.Combine(root, "pages");
+        Directory.CreateDirectory(pagesDir);
+        return new PageHtmlCache(mode, root, pagesDir);
+    }
+
+    private static string NormalizeCacheMode(string? mode)
+    {
+        return (mode ?? "off").Trim().ToLowerInvariant() switch
+        {
+            "readonly" => "readonly",
+            "readwrite" => "readwrite",
+            _ => "off"
+        };
+    }
+
+    private static async Task<string> GetOrRenderPageHtmlAsync(
+        NotionBlocksRenderer renderer,
+        PageHtmlCache? cache,
+        string pageId,
+        string? lastEditedTime,
+        CancellationToken cancellationToken)
+    {
+        if (cache is null)
+        {
+            return await renderer.RenderPageAsync(pageId, cancellationToken);
+        }
+
+        var cachePath = Path.Combine(cache.PagesDir, $"{pageId}.json");
+        if (File.Exists(cachePath))
+        {
+            try
+            {
+                var json = await File.ReadAllBytesAsync(cachePath, cancellationToken);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                var version = root.TryGetProperty("version", out var v) && v.TryGetInt32(out var vv) ? vv : 0;
+                var cachedLastEdited = root.TryGetProperty("lastEditedTime", out var let) && let.ValueKind == JsonValueKind.String ? let.GetString() : null;
+                var cachedHtml = root.TryGetProperty("html", out var h) && h.ValueKind == JsonValueKind.String ? h.GetString() : null;
+
+                if (version == 1 &&
+                    string.Equals(cachedLastEdited, lastEditedTime, StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(cachedHtml))
+                {
+                    return cachedHtml!;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        if (cache.Mode == "readonly")
+        {
+            throw new ContentException($"Notion cache miss in readonly mode for page: {pageId}");
+        }
+
+        var html = await renderer.RenderPageAsync(pageId, cancellationToken);
+        if (cache.Mode == "readwrite")
+        {
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("version", 1);
+                if (lastEditedTime is null)
+                {
+                    writer.WriteNull("lastEditedTime");
+                }
+                else
+                {
+                    writer.WriteString("lastEditedTime", lastEditedTime);
+                }
+                writer.WriteString("html", html);
+                writer.WriteEndObject();
+            }
+
+            await File.WriteAllBytesAsync(cachePath, buffer.WrittenMemory.ToArray(), cancellationToken);
+        }
+
+        return html;
+    }
+
+    private sealed record PageHtmlCache(string Mode, string RootDir, string PagesDir);
 
     private static void PromoteFieldToMeta(IReadOnlyDictionary<string, ContentField> fields, Dictionary<string, object> meta, string fieldKey, string metaKey)
     {
@@ -130,6 +314,120 @@ public sealed class NotionContentProvider : IContentProvider
         }
 
         meta[metaKey] = text.Trim();
+    }
+
+    private static bool IsAutoSummaryEnabled()
+    {
+        var raw = Environment.GetEnvironmentVariable("SITEGEN_AUTO_SUMMARY") ?? string.Empty;
+        raw = raw.Trim();
+        return raw is "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase) || raw.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int GetAutoSummaryMaxLength()
+    {
+        var raw = (Environment.GetEnvironmentVariable("SITEGEN_AUTO_SUMMARY_MAXLEN") ?? string.Empty).Trim();
+        if (int.TryParse(raw, out var n) && n > 0)
+        {
+            return n;
+        }
+
+        return 200;
+    }
+
+    private static string ExtractSummaryFromHtml(string html, int maxLength)
+    {
+        if (maxLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        var text = AutoSummaryStripHtmlToText(html);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        return AutoSummaryTruncateAtWordBoundary(text, maxLength);
+    }
+
+    private static string AutoSummaryStripHtmlToText(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(html.Length);
+        var inTag = false;
+        for (var i = 0; i < html.Length; i++)
+        {
+            var ch = html[i];
+            if (ch == '<')
+            {
+                inTag = true;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                inTag = false;
+                sb.Append(' ');
+                continue;
+            }
+
+            if (!inTag)
+            {
+                sb.Append(ch);
+            }
+        }
+
+        var decoded = WebUtility.HtmlDecode(sb.ToString());
+        return AutoSummaryCollapseWhitespace(decoded);
+    }
+
+    private static string AutoSummaryCollapseWhitespace(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(text.Length);
+        var lastWasSpace = false;
+        foreach (var ch in text)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!lastWasSpace)
+                {
+                    sb.Append(' ');
+                    lastWasSpace = true;
+                }
+                continue;
+            }
+
+            sb.Append(ch);
+            lastWasSpace = false;
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static string AutoSummaryTruncateAtWordBoundary(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        var cut = text.LastIndexOf(' ', maxLength);
+        if (cut < maxLength / 2)
+        {
+            cut = maxLength;
+        }
+
+        var trimmed = text[..cut].TrimEnd();
+        return string.IsNullOrWhiteSpace(trimmed) ? string.Empty : trimmed + "…";
     }
 
     private static void PromoteTaxonomyFieldToMeta(IReadOnlyDictionary<string, ContentField> fields, Dictionary<string, object> meta, string fieldKey)
@@ -311,6 +609,36 @@ public sealed class NotionContentProvider : IContentProvider
                 field = new ContentField("text", text);
                 return !string.IsNullOrWhiteSpace(text);
             }
+            case "url":
+            {
+                if (property.TryGetProperty("url", out var u) && u.ValueKind == JsonValueKind.String)
+                {
+                    var text = u.GetString() ?? string.Empty;
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
+            case "email":
+            {
+                if (property.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String)
+                {
+                    var text = e.GetString() ?? string.Empty;
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
+            case "phone_number":
+            {
+                if (property.TryGetProperty("phone_number", out var p) && p.ValueKind == JsonValueKind.String)
+                {
+                    var text = p.GetString() ?? string.Empty;
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
             case "number":
             {
                 if (property.TryGetProperty("number", out var n) && n.ValueKind is JsonValueKind.Number)
@@ -343,6 +671,56 @@ public sealed class NotionContentProvider : IContentProvider
                 }
                 return false;
             }
+            case "created_time":
+            {
+                if (property.TryGetProperty("created_time", out var ct) && ct.ValueKind == JsonValueKind.String)
+                {
+                    var text = ct.GetString() ?? string.Empty;
+                    if (TryParseDateTimeOffset(text, out var dto))
+                    {
+                        field = new ContentField("date", dto);
+                        return true;
+                    }
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
+            case "last_edited_time":
+            {
+                if (property.TryGetProperty("last_edited_time", out var lt) && lt.ValueKind == JsonValueKind.String)
+                {
+                    var text = lt.GetString() ?? string.Empty;
+                    if (TryParseDateTimeOffset(text, out var dto))
+                    {
+                        field = new ContentField("date", dto);
+                        return true;
+                    }
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
+            case "created_by":
+            {
+                if (property.TryGetProperty("created_by", out var cb) && cb.ValueKind == JsonValueKind.Object)
+                {
+                    var text = ExtractUserNameOrId(cb);
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
+            case "last_edited_by":
+            {
+                if (property.TryGetProperty("last_edited_by", out var lb) && lb.ValueKind == JsonValueKind.Object)
+                {
+                    var text = ExtractUserNameOrId(lb);
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
             case "multi_select":
             {
                 if (property.TryGetProperty("multi_select", out var arr) && arr.ValueKind == JsonValueKind.Array)
@@ -369,11 +747,80 @@ public sealed class NotionContentProvider : IContentProvider
                 }
                 return false;
             }
+            case "status":
+            {
+                if (property.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.Object &&
+                    status.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
+                {
+                    var text = n.GetString() ?? string.Empty;
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
             case "formula":
             {
                 if (property.TryGetProperty("formula", out var f) && f.ValueKind == JsonValueKind.Object)
                 {
                     return TryParseFormulaToField(f, out field);
+                }
+                return false;
+            }
+            case "people":
+            {
+                if (property.TryGetProperty("people", out var people) && people.ValueKind == JsonValueKind.Array)
+                {
+                    var list = people.EnumerateArray()
+                        .Select(x => x.ValueKind == JsonValueKind.Object ? ExtractUserNameOrId(x) : string.Empty)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .ToList();
+
+                    field = new ContentField("list", list);
+                    return list.Count > 0;
+                }
+                return false;
+            }
+            case "relation":
+            {
+                if (property.TryGetProperty("relation", out var rel) && rel.ValueKind == JsonValueKind.Array)
+                {
+                    var list = rel.EnumerateArray()
+                        .Select(x => x.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Select(x => x!.Trim())
+                        .ToList();
+
+                    field = new ContentField("list", list);
+                    return list.Count > 0;
+                }
+                return false;
+            }
+            case "rollup":
+            {
+                if (property.TryGetProperty("rollup", out var rollup) && rollup.ValueKind == JsonValueKind.Object)
+                {
+                    return TryParseRollupToField(rollup, out field);
+                }
+                return false;
+            }
+            case "unique_id":
+            {
+                if (property.TryGetProperty("unique_id", out var uid) && uid.ValueKind == JsonValueKind.Object)
+                {
+                    var text = BuildUniqueIdString(uid);
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
+                }
+                return false;
+            }
+            case "verification":
+            {
+                if (property.TryGetProperty("verification", out var ver) && ver.ValueKind == JsonValueKind.Object)
+                {
+                    var state = ver.TryGetProperty("state", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+                    var text = (state ?? string.Empty).Trim();
+                    field = new ContentField("text", text);
+                    return !string.IsNullOrWhiteSpace(text);
                 }
                 return false;
             }
@@ -411,6 +858,125 @@ public sealed class NotionContentProvider : IContentProvider
         }
     }
 
+    private static bool TryParseDateTimeOffset(string text, out DateTimeOffset dto)
+    {
+        dto = default;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.TryParse(text, out dto);
+    }
+
+    private static string ExtractUserNameOrId(JsonElement user)
+    {
+        if (user.ValueKind != JsonValueKind.Object)
+        {
+            return string.Empty;
+        }
+
+        if (user.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String)
+        {
+            var n = name.GetString() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(n))
+            {
+                return n.Trim();
+            }
+        }
+
+        if (user.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+        {
+            var s = id.GetString() ?? string.Empty;
+            return s.Trim();
+        }
+
+        return string.Empty;
+    }
+
+    private static string BuildUniqueIdString(JsonElement uniqueId)
+    {
+        if (uniqueId.ValueKind != JsonValueKind.Object)
+        {
+            return string.Empty;
+        }
+
+        var prefix = uniqueId.TryGetProperty("prefix", out var p) && p.ValueKind == JsonValueKind.String ? (p.GetString() ?? string.Empty).Trim() : string.Empty;
+        var numberText = string.Empty;
+        if (uniqueId.TryGetProperty("number", out var n))
+        {
+            if (n.ValueKind == JsonValueKind.Number && n.TryGetInt64(out var num))
+            {
+                numberText = num.ToString();
+            }
+            else if (n.ValueKind == JsonValueKind.String)
+            {
+                numberText = (n.GetString() ?? string.Empty).Trim();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(numberText))
+        {
+            return prefix;
+        }
+
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            return numberText;
+        }
+
+        return $"{prefix}-{numberText}";
+    }
+
+    private static bool TryParseRollupToField(JsonElement rollup, out ContentField field)
+    {
+        field = default!;
+        if (!rollup.TryGetProperty("type", out var typeEl) || typeEl.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var type = typeEl.GetString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(type))
+        {
+            return false;
+        }
+
+        if (type == "number" && rollup.TryGetProperty("number", out var n) && n.ValueKind == JsonValueKind.Number)
+        {
+            field = new ContentField("number", n.GetDouble());
+            return true;
+        }
+
+        if (type == "date" && rollup.TryGetProperty("date", out var d) && d.ValueKind == JsonValueKind.Object &&
+            d.TryGetProperty("start", out var start) && start.ValueKind == JsonValueKind.String)
+        {
+            var text = start.GetString() ?? string.Empty;
+            if (TryParseDateTimeOffset(text, out var dto))
+            {
+                field = new ContentField("date", dto);
+                return true;
+            }
+        }
+
+        if (type == "array" && rollup.TryGetProperty("array", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            var list = new List<object>();
+            foreach (var item in arr.EnumerateArray())
+            {
+                if (TryParseNotionPropertyToField(item, out var inner) && inner.Value is not null)
+                {
+                    list.Add(inner.Value);
+                }
+            }
+
+            field = new ContentField("list", list);
+            return list.Count > 0;
+        }
+
+        return false;
+    }
+
     private static string ExtractPlainTextArray(JsonElement property, string key)
     {
         if (!property.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array)
@@ -438,20 +1004,48 @@ public sealed class NotionContentProvider : IContentProvider
         return sb.ToString();
     }
 
-    private static string BuildDatabaseQueryJson(NotionProviderOptions options, string? startCursor, string? resolvedFilterProperty, string? resolvedSortProperty)
+    private static string BuildDatabaseQueryJson(
+        NotionProviderOptions options,
+        string? startCursor,
+        string? resolvedFilterProperty,
+        string? resolvedSortProperty,
+        string? resolvedIncludeSlugProperty)
     {
         var sb = new StringBuilder();
         sb.Append('{');
         sb.Append($"\"page_size\":{options.PageSize},");
 
+        var filters = new List<string>();
         var filterType = (options.FilterType ?? "checkbox_true").Trim().ToLowerInvariant();
         if (filterType == "checkbox_true")
         {
             var prop = (resolvedFilterProperty ?? options.FilterProperty ?? "Published").Trim();
-            sb.Append("\"filter\":{");
-            sb.Append($"\"property\":\"{EscapeJson(prop)}\",");
-            sb.Append("\"checkbox\":{\"equals\":true}");
-            sb.Append("},");
+            filters.Add($"{{\"property\":\"{EscapeJson(prop)}\",\"checkbox\":{{\"equals\":true}}}}");
+        }
+
+        if (options.IncludeSlugs is { Count: > 0 })
+        {
+            var prop = (resolvedIncludeSlugProperty ?? options.IncludeSlugProperty ?? "Slug").Trim();
+            var ors = options.IncludeSlugs
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(x => $"{{\"property\":\"{EscapeJson(prop)}\",\"rich_text\":{{\"equals\":\"{EscapeJson(x)}\"}}}}")
+                .ToList();
+
+            if (ors.Count > 0)
+            {
+                filters.Add($"{{\"or\":[{string.Join(",", ors)}]}}");
+            }
+        }
+
+        if (filters.Count == 1)
+        {
+            sb.Append($"\"filter\":{filters[0]},");
+        }
+        else if (filters.Count > 1)
+        {
+            sb.Append($"\"filter\":{{\"and\":[{string.Join(",", filters)}]}},");
         }
 
         if (!string.IsNullOrWhiteSpace(resolvedSortProperty ?? options.SortProperty))
@@ -824,7 +1418,7 @@ public sealed class NotionContentProvider : IContentProvider
         }
     }
 
-    private static async Task<(string? FilterProperty, string? SortProperty)> ResolveDatabasePropertyNamesAsync(
+    private static async Task<(string? FilterProperty, string? SortProperty, string? IncludeSlugProperty)> ResolveDatabasePropertyNamesAsync(
         NotionApiClient client,
         NotionProviderOptions options,
         CancellationToken cancellationToken)
@@ -832,10 +1426,11 @@ public sealed class NotionContentProvider : IContentProvider
         var filterType = (options.FilterType ?? "checkbox_true").Trim().ToLowerInvariant();
         var filterProp = filterType == "checkbox_true" ? (options.FilterProperty ?? "Published").Trim() : null;
         var sortProp = options.SortProperty?.Trim();
+        var includeSlugProp = options.IncludeSlugs is { Count: > 0 } ? (options.IncludeSlugProperty ?? "Slug").Trim() : null;
 
-        if (string.IsNullOrWhiteSpace(filterProp) && string.IsNullOrWhiteSpace(sortProp))
+        if (string.IsNullOrWhiteSpace(filterProp) && string.IsNullOrWhiteSpace(sortProp) && string.IsNullOrWhiteSpace(includeSlugProp))
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         using var doc = await client.GetAsync($"https://api.notion.com/v1/databases/{options.DatabaseId}", cancellationToken);
@@ -889,6 +1484,18 @@ public sealed class NotionContentProvider : IContentProvider
             }
         }
 
-        return (resolvedFilter, resolvedSort);
+        string? resolvedIncludeSlug = null;
+        if (!string.IsNullOrWhiteSpace(includeSlugProp))
+        {
+            if (!map.TryGetValue(includeSlugProp, out resolvedIncludeSlug))
+            {
+                var available = string.Join(", ", map.Values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+                throw new ContentException(
+                    $"Notion database property '{includeSlugProp}' not found (case-insensitive match). " +
+                    $"Available properties: {available}.");
+            }
+        }
+
+        return (resolvedFilter, resolvedSort, resolvedIncludeSlug);
     }
 }

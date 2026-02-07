@@ -52,6 +52,12 @@ dotnet run --project src/SiteGen.Cli -c Release -- build --clean
 dotnet run --project src/SiteGen.Cli -c Release -- build --clean --metrics metrics.json --log-format json
 ```
 
+并行渲染（可加速大站点构建；默认使用 CPU 核心数）：
+
+```bash
+dotnet run --project src/SiteGen.Cli -c Release -- build --clean --jobs 8
+```
+
 多站点（读取 `sites/<name>.yaml`，但 rootDir 仍为当前目录）：
 
 ```bash
@@ -112,7 +118,16 @@ dotnet run --project src/SiteGen.Cli -c Release -- webhook --repo owner/repo --p
 - `site.baseUrl`：GitHub Pages 子路径（例如 `/my-repo`），根站点用 `/`
 - `site.url`：站点绝对域名（用于 sitemap/rss），也可通过 `--site-url` 覆盖
 - `site.pluginFailMode`：插件失败策略（`strict` 默认中断构建；`warn` 仅记录错误继续）
+- `site.autoSummary`：未提供 summary 时是否从正文提取摘要（用于 taxonomy/rss/search 等）
+- `site.autoSummaryMaxLength`：自动摘要最大长度（字符数）
 - `content.provider`：`markdown` 或 `notion`
+- `content.markdown.maxItems`：最多读取多少篇 Markdown（正整数）
+- `content.markdown.includePaths/includeGlobs`：只读取指定的 Markdown（用于大仓库/单篇调试）
+- `content.notion.maxItems`：最多拉取多少条 Notion 页面（正整数）
+- `content.notion.includeSlugs`：只拉取 slug 在列表中的页面（数据库 query 过滤）
+- `content.notion.cacheMode/cacheDir`：Notion 渲染缓存（off/readwrite/readonly）
+- `content.notion.renderConcurrency/maxRps/maxRetries`：Notion 并发渲染与限流/重试（提升大库渲染速度与稳定性）
+- 构建结束会输出 `event=notion.stats`：Notion 请求数与节流等待统计（便于评估吞吐与瓶颈）
 - `build.output`：输出目录（相对 `site.yaml` 所在目录）
 - `theme.layouts/assets/static`：模板、资源与静态文件目录（相对 `site.yaml` 所在目录）
 
@@ -166,6 +181,7 @@ content:
         - seo_title
         - seo_desc
         - reading_time
+        - my_link
 ```
 
 模板示例：
@@ -228,7 +244,7 @@ v2 的字段模板与 schema 说明见：
 示例（linux-x64）：
 
 ```bash
-dotnet publish src/SiteGen.Cli -c Release -r linux-x64 -o out/sitegen /p:PublishAot=true
+dotnet publish src/SiteGen.Cli -c AOT -r linux-x64 -o out/sitegen
 ```
 
 Windows 示例（win-x64）：

@@ -24,6 +24,31 @@ content:
 
 引擎会递归读取 `content/` 下的所有 `*.md`。
 
+## 限额与指定读取（大仓库/单篇调试）
+
+当你的仓库 Markdown 数量很多，或你只想调试某几篇内容时，可以在配置里限制读取范围：
+
+```yaml
+content:
+  provider: markdown
+  markdown:
+    dir: content
+    defaultType: page
+    maxItems: 5000
+    includePaths:
+      - hello-world.md
+      - blog/2026-01-update.md
+    includeGlobs:
+      - blog/*.md
+      - "**/pages/*.md"
+```
+
+说明：
+
+- `maxItems`：最多读取多少篇（按路径排序后截断）。
+- `includePaths`：只读取指定路径（相对 `content.markdown.dir`；可省略 `.md`）。
+- `includeGlobs`：只读取匹配 glob 的文件（匹配相对路径，分隔符使用 `/`；`**` 表示跨目录）。
+
 ## Front Matter（YAML）基础写法
 
 每个 Markdown 文件可选带一个 YAML Front Matter 段：

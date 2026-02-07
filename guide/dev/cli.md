@@ -48,6 +48,7 @@
 | `--incremental` | 启用增量构建 | 覆盖增量开关（默认启用） |
 | `--no-incremental` | 关闭增量构建 | 覆盖增量开关 |
 | `--cache-dir <dir>` | 覆盖缓存目录 | 默认 `<rootDir>/.cache` |
+| `--jobs <n>` | 并行渲染并发度 | 正整数；默认 CPU 核心数 |
 | `--metrics <path>` | 输出构建指标 JSON | 相对路径按 rootDir 解析 |
 | `--log-format <text|json>` | 控制日志输出格式 | 默认 `text` |
 

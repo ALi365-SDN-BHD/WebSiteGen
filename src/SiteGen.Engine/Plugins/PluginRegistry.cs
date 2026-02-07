@@ -1,4 +1,6 @@
+#if !AOT
 using System.Reflection;
+#endif
 using SiteGen.Engine.Plugins.Generated;
 using SiteGen.Shared;
 
@@ -22,6 +24,7 @@ public sealed class BuiltInPluginSource : IPluginSource
     }
 }
 
+#if !AOT
 public sealed class ExternalAssemblyPluginSource : IPluginSource
 {
     private readonly string _pluginsDir;
@@ -93,6 +96,7 @@ public sealed class ExternalAssemblyPluginSource : IPluginSource
         }
     }
 }
+#endif
 
 public static class PluginRegistry
 {

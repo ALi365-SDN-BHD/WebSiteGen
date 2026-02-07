@@ -10,6 +10,11 @@ if (command is null || command is "help" or "--help" or "-h")
     return 0;
 }
 
+if (command is not "version")
+{
+    Console.Error.WriteLine($"sitegen {CliBuildInfo.Version}");
+}
+
 try
 {
     return command switch

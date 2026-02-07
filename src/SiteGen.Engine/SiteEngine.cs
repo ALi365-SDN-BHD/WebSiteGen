@@ -1,5 +1,10 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Threading;
+using System.Threading.Tasks;
 using SiteGen.Engine.Plugins;
 using SiteGen.Engine.Incremental;
 using SiteGen.Config;
@@ -38,7 +43,7 @@ public sealed class SiteEngine
         Directory.CreateDirectory(outputDir);
         _logger.Info($"event=build.start rootDir={rootDir} outputDir={outputDir}");
 
-        var provider = CreateContentProvider(effectiveConfig, rootDir, overrides.IsCI);
+        var provider = CreateContentProvider(effectiveConfig, rootDir, overrides.IsCI, _logger);
         var items = await provider.LoadAsync(cancellationToken);
 
         _logger.Info($"event=content.loaded count={items.Count}");
@@ -128,7 +133,7 @@ public sealed class SiteEngine
 
         if (Directory.Exists(staticDir))
         {
-            DirectoryCopy.Copy(staticDir, outputDir);
+            DirectoryCopy.Sync(staticDir, outputDir);
         }
 
         var dataItems = items.Where(IsDataItem).ToList();
@@ -172,8 +177,6 @@ public sealed class SiteEngine
             Data = pluginContext.Data.Count == 0 ? null : pluginContext.Data
         };
 
-        var renderQueue = routed.Concat(pluginContext.DerivedRouted).ToList();
-
         var incrementalEnabled = overrides.Incremental ?? true;
         var cacheDir = string.IsNullOrWhiteSpace(overrides.CacheDir)
             ? Path.Combine(rootDir, ".cache")
@@ -187,27 +190,53 @@ public sealed class SiteEngine
         var templateHash = incrementalEnabled ? HashUtil.Sha256HexForDirectory(layoutsDir) : string.Empty;
         var manifest = incrementalEnabled ? BuildManifest.Load(manifestPath) : new BuildManifest();
         manifest.TemplateHash = templateHash;
+        var manifestEntries = incrementalEnabled
+            ? new ConcurrentDictionary<string, BuildManifestEntry>(manifest.Entries, StringComparer.Ordinal)
+            : null;
+
+        var renderQueue = routed.Concat(pluginContext.DerivedRouted).ToList();
+        var workItems = new List<(ContentItem Item, RouteInfo Route, string Key)>(renderQueue.Count);
 
         var currentKeys = new HashSet<string>(StringComparer.Ordinal);
-        var renderedCount = 0;
-        var skippedCount = 0;
-        var renderReasons = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
         var warnedOutputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (item, route) in renderQueue)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
             var key = NormalizeRelPath(route.OutputPath);
             WarnIfWindowsIncompatible(route.OutputPath, warnedOutputPaths);
             currentKeys.Add(key);
+            workItems.Add((item, route, key));
+        }
+
+        var renderedCount = 0;
+        var skippedCount = 0;
+        var renderReasons = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        var maxDegreeOfParallelism = overrides.Jobs ?? Environment.ProcessorCount;
+        if (maxDegreeOfParallelism <= 0)
+        {
+            maxDegreeOfParallelism = Environment.ProcessorCount;
+        }
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = maxDegreeOfParallelism,
+            CancellationToken = cancellationToken
+        };
+
+        Parallel.ForEach(workItems, parallelOptions, work =>
+        {
+            var item = work.Item;
+            var route = work.Route;
+            var key = work.Key;
 
             var contentHash = ComputeContentHash(item);
             var routeHash = ComputeRouteHash(route);
             var outputPath = Path.Combine(outputDir, route.OutputPath);
             var outputExists = File.Exists(outputPath);
+
             BuildManifestEntry? existing = null;
-            var hasExisting = incrementalEnabled && manifest.Entries.TryGetValue(key, out existing) && existing is not null;
+            var hasExisting = incrementalEnabled && manifestEntries is not null && manifestEntries.TryGetValue(key, out existing) && existing is not null;
 
             var canSkip = incrementalEnabled &&
                 hasExisting &&
@@ -218,9 +247,9 @@ public sealed class SiteEngine
 
             if (canSkip)
             {
-                skippedCount++;
-                renderReasons["unchanged"] = renderReasons.GetValueOrDefault("unchanged") + 1;
-                continue;
+                Interlocked.Increment(ref skippedCount);
+                renderReasons.AddOrUpdate("unchanged", 1, (_, v) => v + 1);
+                return;
             }
 
             if (incrementalEnabled)
@@ -231,11 +260,11 @@ public sealed class SiteEngine
                     : existing.ContentHash != contentHash ? "content_changed"
                     : existing.RouteHash != routeHash ? "route_changed"
                     : "render";
-                renderReasons[reason] = renderReasons.GetValueOrDefault(reason) + 1;
+                renderReasons.AddOrUpdate(reason, 1, (_, v) => v + 1);
             }
             else
             {
-                renderReasons["full_render"] = renderReasons.GetValueOrDefault("full_render") + 1;
+                renderReasons.AddOrUpdate("full_render", 1, (_, v) => v + 1);
             }
 
             var pageModel = new PageModel
@@ -254,11 +283,11 @@ public sealed class SiteEngine
 
             var html = renderer.RenderPage(route.Template, pageModel);
             FileWriter.WriteUtf8(outputDir, route.OutputPath, html);
-            renderedCount++;
+            Interlocked.Increment(ref renderedCount);
 
-            if (incrementalEnabled)
+            if (incrementalEnabled && manifestEntries is not null)
             {
-                manifest.Entries[key] = new BuildManifestEntry
+                manifestEntries[key] = new BuildManifestEntry
                 {
                     OutputPath = key,
                     Url = route.Url,
@@ -268,6 +297,40 @@ public sealed class SiteEngine
                     TemplateHash = templateHash
                 };
             }
+        });
+
+        if (incrementalEnabled && manifestEntries is not null)
+        {
+            manifest.Entries = manifestEntries.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+        }
+
+        var homeRoute = new RouteInfo("/", "index.html", "pages/index.html");
+        var blogRoute = new RouteInfo("/blog/", Path.Combine("blog", "index.html"), "pages/list.html");
+        var pagesRoute = new RouteInfo("/pages/", Path.Combine("pages", "index.html"), "pages/list.html");
+
+        var homeKey = NormalizeRelPath(homeRoute.OutputPath);
+        var blogKey = NormalizeRelPath(blogRoute.OutputPath);
+        var pagesKey = NormalizeRelPath(pagesRoute.OutputPath);
+        currentKeys.Add(homeKey);
+        currentKeys.Add(blogKey);
+        currentKeys.Add(pagesKey);
+
+        if (incrementalEnabled)
+        {
+            RenderSpecialListIfNeeded(homeRoute, routed.OrderByDescending(x => x.Item.PublishAt).ToList());
+            RenderSpecialListIfNeeded(blogRoute, routed.Where(x => x.Route.Url.StartsWith("/blog/", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.Item.PublishAt).ToList());
+            RenderSpecialListIfNeeded(pagesRoute, routed.Where(x => x.Route.Url.StartsWith("/pages/", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.Item.PublishAt).ToList());
+        }
+        else
+        {
+            RenderSpecialListAlways(homeRoute, routed.OrderByDescending(x => x.Item.PublishAt).ToList());
+            RenderSpecialListAlways(blogRoute, routed.Where(x => x.Route.Url.StartsWith("/blog/", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.Item.PublishAt).ToList());
+            RenderSpecialListAlways(pagesRoute, routed.Where(x => x.Route.Url.StartsWith("/pages/", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.Item.PublishAt).ToList());
+        }
+
+        if (Directory.Exists(assetsDir))
+        {
+            DirectoryCopy.Sync(assetsDir, Path.Combine(outputDir, "assets"));
         }
 
         if (incrementalEnabled)
@@ -277,76 +340,6 @@ public sealed class SiteEngine
             {
                 manifest.Entries.Remove(k);
             }
-        }
-
-        var allPages = routed
-            .Select(x => new PageInfo
-            {
-                Title = x.Item.Title,
-                Url = x.Route.Url,
-                Content = x.Item.ContentHtml,
-                Summary = x.Item.Meta.TryGetValue("summary", out var summary) ? summary?.ToString() : null,
-                PublishDate = x.Item.PublishAt,
-                Fields = x.Item.Fields
-            })
-            .OrderByDescending(p => p.PublishDate)
-            .ToList();
-
-        var homeHtml = renderer.RenderList("pages/index.html", new ListPageModel
-        {
-            Site = siteModel,
-            Pages = allPages
-        });
-
-        FileWriter.WriteUtf8(outputDir, "index.html", homeHtml);
-
-        var blogPages = routed
-            .Where(x => x.Route.Url.StartsWith("/blog/", StringComparison.OrdinalIgnoreCase))
-            .Select(x => new PageInfo
-            {
-                Title = x.Item.Title,
-                Url = x.Route.Url,
-                Content = x.Item.ContentHtml,
-                Summary = x.Item.Meta.TryGetValue("summary", out var summary) ? summary?.ToString() : null,
-                PublishDate = x.Item.PublishAt,
-                Fields = x.Item.Fields
-            })
-            .OrderByDescending(p => p.PublishDate)
-            .ToList();
-
-        var blogListHtml = renderer.RenderList("pages/list.html", new ListPageModel
-        {
-            Site = siteModel,
-            Pages = blogPages
-        });
-
-        FileWriter.WriteUtf8(outputDir, Path.Combine("blog", "index.html"), blogListHtml);
-
-        var pagePages = routed
-            .Where(x => x.Route.Url.StartsWith("/pages/", StringComparison.OrdinalIgnoreCase))
-            .Select(x => new PageInfo
-            {
-                Title = x.Item.Title,
-                Url = x.Route.Url,
-                Content = x.Item.ContentHtml,
-                Summary = x.Item.Meta.TryGetValue("summary", out var summary) ? summary?.ToString() : null,
-                PublishDate = x.Item.PublishAt,
-                Fields = x.Item.Fields
-            })
-            .OrderByDescending(p => p.PublishDate)
-            .ToList();
-
-        var pagesListHtml = renderer.RenderList("pages/list.html", new ListPageModel
-        {
-            Site = siteModel,
-            Pages = pagePages
-        });
-
-        FileWriter.WriteUtf8(outputDir, Path.Combine("pages", "index.html"), pagesListHtml);
-
-        if (Directory.Exists(assetsDir))
-        {
-            DirectoryCopy.Copy(assetsDir, Path.Combine(outputDir, "assets"));
         }
 
         PluginRunner.RunAfterBuild(pluginContext);
@@ -364,6 +357,121 @@ public sealed class SiteEngine
         else
         {
             _logger.Info($"Build completed: {Path.GetFullPath(outputDir)} (lang={config.Site.Language})");
+        }
+
+        void RenderSpecialListAlways(RouteInfo listRoute, IReadOnlyList<(ContentItem Item, RouteInfo Route)> source)
+        {
+            var pageInfos = source.Select(x => new PageInfo
+                {
+                    Title = x.Item.Title,
+                    Url = x.Route.Url,
+                    Content = x.Item.ContentHtml,
+                    Summary = x.Item.Meta.TryGetValue("summary", out var summary) ? summary?.ToString() : null,
+                    PublishDate = x.Item.PublishAt,
+                    Fields = x.Item.Fields
+                })
+                .ToList();
+
+            var html = renderer.RenderList(listRoute.Template, new ListPageModel
+            {
+                Site = siteModel,
+                Pages = pageInfos
+            });
+
+            FileWriter.WriteUtf8(outputDir, listRoute.OutputPath, html);
+            renderedCount++;
+        }
+
+        void RenderSpecialListIfNeeded(RouteInfo listRoute, IReadOnlyList<(ContentItem Item, RouteInfo Route)> source)
+        {
+            var key = NormalizeRelPath(listRoute.OutputPath);
+            var routeHash = ComputeRouteHash(listRoute);
+            var contentHash = ComputeListContentHash(listRoute.Template, source);
+            var outputPath = Path.Combine(outputDir, listRoute.OutputPath);
+            var outputExists = File.Exists(outputPath);
+            var hasExisting = manifest.Entries.TryGetValue(key, out var existing) && existing is not null;
+
+            var canSkip = hasExisting &&
+                outputExists &&
+                existing!.TemplateHash == templateHash &&
+                existing.ContentHash == contentHash &&
+                existing.RouteHash == routeHash;
+
+            if (canSkip)
+            {
+                skippedCount++;
+                renderReasons.AddOrUpdate("list_unchanged", 1, (_, v) => v + 1);
+                return;
+            }
+
+            var pageInfos = source.Select(x => new PageInfo
+                {
+                    Title = x.Item.Title,
+                    Url = x.Route.Url,
+                    Content = x.Item.ContentHtml,
+                    Summary = x.Item.Meta.TryGetValue("summary", out var summary) ? summary?.ToString() : null,
+                    PublishDate = x.Item.PublishAt,
+                    Fields = x.Item.Fields
+                })
+                .ToList();
+
+            var html = renderer.RenderList(listRoute.Template, new ListPageModel
+            {
+                Site = siteModel,
+                Pages = pageInfos
+            });
+
+            FileWriter.WriteUtf8(outputDir, listRoute.OutputPath, html);
+            renderedCount++;
+            renderReasons.AddOrUpdate("list_render", 1, (_, v) => v + 1);
+
+            manifest.Entries[key] = new BuildManifestEntry
+            {
+                OutputPath = key,
+                Url = listRoute.Url,
+                Template = listRoute.Template,
+                ContentHash = contentHash,
+                RouteHash = routeHash,
+                TemplateHash = templateHash
+            };
+        }
+
+        string ComputeListContentHash(string template, IReadOnlyList<(ContentItem Item, RouteInfo Route)> source)
+        {
+            using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            Span<byte> newline = stackalloc byte[1];
+            newline[0] = (byte)'\n';
+
+            AppendUtf8(hasher, templateHash);
+            hasher.AppendData(newline);
+            AppendUtf8(hasher, template);
+
+            foreach (var (item, route) in source)
+            {
+                hasher.AppendData(newline);
+                AppendUtf8(hasher, route.Url);
+                hasher.AppendData(newline);
+
+                var k = NormalizeRelPath(route.OutputPath);
+                AppendUtf8(hasher, k);
+                hasher.AppendData(newline);
+
+                if (manifest.Entries.TryGetValue(k, out var entry) && entry is not null)
+                {
+                    AppendUtf8(hasher, entry.ContentHash);
+                    hasher.AppendData(newline);
+                    AppendUtf8(hasher, entry.RouteHash);
+                }
+                else
+                {
+                    AppendUtf8(hasher, ComputeContentHash(item));
+                    hasher.AppendData(newline);
+                    AppendUtf8(hasher, ComputeRouteHash(route));
+                }
+            }
+
+            var digest = hasher.GetHashAndReset();
+            return HashUtil.ToHexLower(digest);
         }
 
         return new BuildVariantResult(
@@ -411,37 +519,102 @@ public sealed class SiteEngine
             Directory.CreateDirectory(dir);
         }
 
-        var payload = new
-        {
-            version = 1,
-            ts = DateTimeOffset.UtcNow.ToString("O"),
-            site = new
-            {
-                name = config.Site.Name,
-                title = config.Site.Title,
-                url = config.Site.Url,
-                baseUrl = config.Site.BaseUrl,
-                language = config.Site.Language,
-                defaultLanguage = config.Site.DefaultLanguage,
-                languages = config.Site.Languages
-            },
-            outputDir = Path.GetFullPath(outputDir),
-            contentItems = contentItemCount,
-            variants = variants.Select(v => new
-            {
-                language = v.Language,
-                baseUrl = v.BaseUrl,
-                outputDir = Path.GetFullPath(v.OutputDir),
-                routed = v.Routed.Count,
-                derived = v.DerivedRouted.Count,
-                rendered = v.RenderedCount,
-                skipped = v.SkippedCount,
-                reasons = v.RenderReasons,
-                plugins = v.PluginExecutions
-            })
-        };
+        using var stream = File.Create(fullPath);
+        using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
+        writer.WriteStartObject();
 
-        File.WriteAllText(fullPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+        writer.WriteNumber("version", 1);
+        writer.WriteString("ts", DateTimeOffset.UtcNow.ToString("O"));
+
+        writer.WritePropertyName("site");
+        writer.WriteStartObject();
+        writer.WriteString("name", config.Site.Name);
+        writer.WriteString("title", config.Site.Title);
+        if (config.Site.Url is null)
+        {
+            writer.WriteNull("url");
+        }
+        else
+        {
+            writer.WriteString("url", config.Site.Url);
+        }
+        writer.WriteString("baseUrl", config.Site.BaseUrl);
+        writer.WriteString("language", config.Site.Language);
+        if (config.Site.DefaultLanguage is null)
+        {
+            writer.WriteNull("defaultLanguage");
+        }
+        else
+        {
+            writer.WriteString("defaultLanguage", config.Site.DefaultLanguage);
+        }
+        writer.WritePropertyName("languages");
+        if (config.Site.Languages is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            writer.WriteStartArray();
+            foreach (var lang in config.Site.Languages)
+            {
+                writer.WriteStringValue(lang);
+            }
+            writer.WriteEndArray();
+        }
+        writer.WriteEndObject();
+
+        writer.WriteString("outputDir", Path.GetFullPath(outputDir));
+        writer.WriteNumber("contentItems", contentItemCount);
+
+        writer.WritePropertyName("variants");
+        writer.WriteStartArray();
+        foreach (var v in variants)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("language", v.Language);
+            writer.WriteString("baseUrl", v.BaseUrl);
+            writer.WriteString("outputDir", Path.GetFullPath(v.OutputDir));
+            writer.WriteNumber("routed", v.Routed.Count);
+            writer.WriteNumber("derived", v.DerivedRouted.Count);
+            writer.WriteNumber("rendered", v.RenderedCount);
+            writer.WriteNumber("skipped", v.SkippedCount);
+
+            writer.WritePropertyName("reasons");
+            writer.WriteStartObject();
+            foreach (var kv in v.RenderReasons)
+            {
+                writer.WriteNumber(kv.Key, kv.Value);
+            }
+            writer.WriteEndObject();
+
+            writer.WritePropertyName("plugins");
+            writer.WriteStartArray();
+            foreach (var p in v.PluginExecutions)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("name", p.Name);
+                writer.WriteString("hook", p.Hook);
+                writer.WriteNumber("durationMs", p.DurationMs);
+                writer.WriteBoolean("success", p.Success);
+                if (p.Error is null)
+                {
+                    writer.WriteNull("error");
+                }
+                else
+                {
+                    writer.WriteString("error", p.Error);
+                }
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+
+        writer.WriteEndObject();
+        writer.Flush();
     }
 
     private void GenerateI18nRootOutputs(AppConfig config, string outputDir, string rootBaseUrl, IReadOnlyList<BuildVariantResult> results)
@@ -1078,32 +1251,47 @@ public sealed class SiteEngine
 
     private static string ComputeContentHash(ContentItem item)
     {
-        var type = item.Meta.TryGetValue("type", out var typeObj) && typeObj is not null ? typeObj.ToString() : string.Empty;
-        var summary = item.Meta.TryGetValue("summary", out var summaryObj) && summaryObj is not null ? summaryObj.ToString() : string.Empty;
-        var fieldsFingerprint = ComputeFieldsFingerprint(item.Fields);
-        var fingerprint = string.Join(
-            "\n",
-            item.Id,
-            item.Title,
-            item.Slug,
-            item.PublishAt.ToString("O"),
-            type ?? string.Empty,
-            summary ?? string.Empty,
-            fieldsFingerprint,
-            item.ContentHtml);
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> newline = stackalloc byte[1];
+        newline[0] = (byte)'\n';
 
-        return HashUtil.Sha256Hex(fingerprint);
+        AppendUtf8(hasher, item.Id);
+        hasher.AppendData(newline);
+        AppendUtf8(hasher, item.Title);
+        hasher.AppendData(newline);
+        AppendUtf8(hasher, item.Slug);
+        hasher.AppendData(newline);
+        AppendUtf8(hasher, item.PublishAt.ToString("O"));
+        hasher.AppendData(newline);
+
+        var type = item.Meta.TryGetValue("type", out var typeObj) && typeObj is not null ? typeObj.ToString() : string.Empty;
+        AppendUtf8(hasher, type);
+        hasher.AppendData(newline);
+
+        var summary = item.Meta.TryGetValue("summary", out var summaryObj) && summaryObj is not null ? summaryObj.ToString() : string.Empty;
+        AppendUtf8(hasher, summary);
+        hasher.AppendData(newline);
+
+        AppendFieldsFingerprint(hasher, item.Fields);
+        hasher.AppendData(newline);
+
+        AppendUtf8(hasher, item.ContentHtml);
+
+        var digest = hasher.GetHashAndReset();
+        return HashUtil.ToHexLower(digest);
     }
 
-    private static string ComputeFieldsFingerprint(IReadOnlyDictionary<string, ContentField>? fields)
+    private static void AppendFieldsFingerprint(IncrementalHash hasher, IReadOnlyDictionary<string, ContentField>? fields)
     {
         if (fields is null || fields.Count == 0)
         {
-            return string.Empty;
+            return;
         }
 
         var keys = fields.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
-        var parts = new List<string>(capacity: keys.Count * 3);
+        Span<byte> newline = stackalloc byte[1];
+        newline[0] = (byte)'\n';
+        var wroteAny = false;
 
         foreach (var k in keys)
         {
@@ -1112,43 +1300,104 @@ public sealed class SiteEngine
                 continue;
             }
 
-            parts.Add(k);
-            parts.Add(f.Type ?? string.Empty);
-            parts.Add(FieldValueToString(f.Value));
-        }
+            if (wroteAny)
+            {
+                hasher.AppendData(newline);
+            }
 
-        return string.Join("\n", parts);
+            AppendUtf8(hasher, k);
+            hasher.AppendData(newline);
+            AppendUtf8(hasher, f.Type ?? string.Empty);
+            hasher.AppendData(newline);
+            AppendFieldValue(hasher, f.Value);
+            wroteAny = true;
+        }
     }
 
-    private static string FieldValueToString(object? value)
+    private static void AppendFieldValue(IncrementalHash hasher, object? value)
     {
         if (value is null)
         {
-            return string.Empty;
+            return;
         }
 
         if (value is DateTimeOffset dto)
         {
-            return dto.ToString("O");
+            AppendUtf8(hasher, dto.ToString("O"));
+            return;
         }
 
         if (value is DateTime dt)
         {
-            return dt.ToUniversalTime().ToString("O");
+            AppendUtf8(hasher, dt.ToUniversalTime().ToString("O"));
+            return;
+        }
+
+        if (value is string s)
+        {
+            AppendUtf8(hasher, s);
+            return;
         }
 
         if (value is IEnumerable<object> seq)
         {
-            var items = seq.Select(FieldValueToString).ToList();
-            return string.Join(",", items);
+            var first = true;
+            Span<byte> comma = stackalloc byte[1];
+            comma[0] = (byte)',';
+            foreach (var v in seq)
+            {
+                if (!first)
+                {
+                    hasher.AppendData(comma);
+                }
+
+                AppendFieldValue(hasher, v);
+                first = false;
+            }
+
+            return;
         }
 
         if (value is IEnumerable<string> sseq)
         {
-            return string.Join(",", sseq);
+            var first = true;
+            Span<byte> comma = stackalloc byte[1];
+            comma[0] = (byte)',';
+            foreach (var v in sseq)
+            {
+                if (!first)
+                {
+                    hasher.AppendData(comma);
+                }
+
+                AppendUtf8(hasher, v);
+                first = false;
+            }
+
+            return;
         }
 
-        return value.ToString() ?? string.Empty;
+        AppendUtf8(hasher, value.ToString() ?? string.Empty);
+    }
+
+    private static void AppendUtf8(IncrementalHash hasher, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(text.Length);
+        var buffer = ArrayPool<byte>.Shared.Rent(maxByteCount);
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(text, 0, text.Length, buffer, 0);
+            hasher.AppendData(buffer.AsSpan(0, written));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static string ComputeRouteHash(RouteInfo route)
@@ -1191,7 +1440,7 @@ public sealed class SiteEngine
 
         if (!string.IsNullOrWhiteSpace(options.AssetsDir))
         {
-            DirectoryCopy.Copy(options.AssetsDir, Path.Combine(options.OutputDir, "assets"));
+            DirectoryCopy.Sync(options.AssetsDir, Path.Combine(options.OutputDir, "assets"));
         }
 
         if (!string.IsNullOrWhiteSpace(options.SiteUrl) && options.GenerateSitemap)
@@ -1215,7 +1464,7 @@ public sealed class SiteEngine
         _logger.Info($"Build completed: {Path.GetFullPath(options.OutputDir)}");
     }
 
-    private static IContentProvider CreateContentProvider(AppConfig config, string rootDir, bool isCi)
+    private static IContentProvider CreateContentProvider(AppConfig config, string rootDir, bool isCi, ILogger logger)
     {
         if (config.Content.Sources is { Count: > 0 } sources)
         {
@@ -1259,7 +1508,7 @@ public sealed class SiteEngine
                 {
                     var md = s.Markdown ?? new MarkdownConfig();
                     var contentDir = MakeAbsolute(rootDir, md.Dir);
-                    providers.Add((key, mode, new MarkdownFolderProvider(new MarkdownFolderProviderOptions(contentDir, md.DefaultType))));
+                    providers.Add((key, mode, new MarkdownFolderProvider(new MarkdownFolderProviderOptions(contentDir, md.DefaultType, md.MaxItems, md.IncludePaths, md.IncludeGlobs))));
                     continue;
                 }
 
@@ -1272,7 +1521,7 @@ public sealed class SiteEngine
                     }
 
                     var renderContent = notion.RenderContent ?? mode != "data";
-                    providers.Add((key, mode, CreateNotionProvider(notion, isCi, renderContent: renderContent)));
+                    providers.Add((key, mode, CreateNotionProvider(rootDir, notion, isCi, renderContent: renderContent, logger: logger)));
                     continue;
                 }
 
@@ -1286,7 +1535,7 @@ public sealed class SiteEngine
         {
             var md = config.Content.Markdown ?? new MarkdownConfig();
             var contentDir = MakeAbsolute(rootDir, md.Dir);
-            return new MarkdownFolderProvider(new MarkdownFolderProviderOptions(contentDir, md.DefaultType));
+            return new MarkdownFolderProvider(new MarkdownFolderProviderOptions(contentDir, md.DefaultType, md.MaxItems, md.IncludePaths, md.IncludeGlobs));
         }
 
         if (config.Content.Provider.Equals("notion", StringComparison.OrdinalIgnoreCase))
@@ -1298,13 +1547,13 @@ public sealed class SiteEngine
             }
 
             var renderContent = notion.RenderContent ?? true;
-            return CreateNotionProvider(notion, isCi, renderContent: renderContent);
+            return CreateNotionProvider(rootDir, notion, isCi, renderContent: renderContent, logger: logger);
         }
 
         throw new ContentException($"Unknown content provider: {config.Content.Provider}");
     }
 
-    private static NotionContentProvider CreateNotionProvider(NotionConfig notion, bool isCi, bool renderContent)
+    private static NotionContentProvider CreateNotionProvider(string rootDir, NotionConfig notion, bool isCi, bool renderContent, ILogger logger)
     {
         var token = Environment.GetEnvironmentVariable("NOTION_TOKEN");
         if (string.IsNullOrWhiteSpace(token))
@@ -1312,20 +1561,40 @@ public sealed class SiteEngine
             throw new ContentException("NOTION_TOKEN is required for notion provider and must come from environment variables.");
         }
 
+        var renderConcurrency = notion.RenderConcurrency is > 0 ? notion.RenderConcurrency.Value : isCi ? 2 : 4;
+        var maxRps = notion.MaxRps is > 0 ? notion.MaxRps.Value : 3;
+        var maxRetries = notion.MaxRetries is >= 0 ? notion.MaxRetries.Value : 5;
+
+        var cacheMode = (notion.CacheMode ?? "off").Trim().ToLowerInvariant();
+        cacheMode = cacheMode is "readwrite" or "readonly" ? cacheMode : "off";
+        var cacheDir = cacheMode == "off"
+            ? null
+            : string.IsNullOrWhiteSpace(notion.CacheDir)
+                ? Path.Combine(rootDir, ".cache", "notion")
+                : MakeAbsolute(rootDir, notion.CacheDir);
+
         return new NotionContentProvider(new NotionProviderOptions
         {
             DatabaseId = notion.DatabaseId,
             Token = token,
             PageSize = notion.PageSize,
-            RequestDelayMs = isCi ? 150 : 0,
+            MaxItems = notion.MaxItems,
+            RequestDelayMs = 0,
+            MaxRetries = maxRetries,
+            RenderConcurrency = renderConcurrency,
+            MaxRps = maxRps,
             FieldPolicyMode = notion.FieldPolicy.Mode,
             AllowedFields = notion.FieldPolicy.Allowed,
             FilterProperty = notion.FilterProperty,
             FilterType = notion.FilterType,
             SortProperty = notion.SortProperty,
             SortDirection = notion.SortDirection,
-            RenderContent = renderContent
-        });
+            RenderContent = renderContent,
+            IncludeSlugs = notion.IncludeSlugs,
+            IncludeSlugProperty = notion.IncludeSlugProperty,
+            CacheMode = cacheMode,
+            CacheDir = cacheDir
+        }, logger: logger);
     }
 
     private static string MakeAbsolute(string rootDir, string path)

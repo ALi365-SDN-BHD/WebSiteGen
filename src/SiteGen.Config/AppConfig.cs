@@ -16,6 +16,8 @@ public sealed record SiteConfig
     public required string Title { get; init; }
     public string? Url { get; init; }
     public string? Description { get; init; }
+    public bool AutoSummary { get; init; }
+    public int AutoSummaryMaxLength { get; init; } = 200;
     public string BaseUrl { get; init; } = "/";
     public string OutputPathEncoding { get; init; } = "none";
     public string Language { get; init; } = "zh-CN";
@@ -51,12 +53,20 @@ public sealed record NotionConfig
 {
     public required string DatabaseId { get; init; }
     public int PageSize { get; init; } = 50;
+    public int? MaxItems { get; init; }
     public bool? RenderContent { get; init; }
+    public int? RenderConcurrency { get; init; }
+    public int? MaxRps { get; init; }
+    public int? MaxRetries { get; init; }
     public NotionFieldPolicyConfig FieldPolicy { get; init; } = new();
     public string FilterProperty { get; init; } = "Published";
     public string FilterType { get; init; } = "checkbox_true";
     public string? SortProperty { get; init; }
     public string SortDirection { get; init; } = "ascending";
+    public IReadOnlyList<string>? IncludeSlugs { get; init; }
+    public string IncludeSlugProperty { get; init; } = "Slug";
+    public string CacheMode { get; init; } = "off";
+    public string? CacheDir { get; init; }
 }
 
 public sealed record NotionFieldPolicyConfig
@@ -69,6 +79,9 @@ public sealed record MarkdownConfig
 {
     public string Dir { get; init; } = "content";
     public string DefaultType { get; init; } = "page";
+    public int? MaxItems { get; init; }
+    public IReadOnlyList<string>? IncludePaths { get; init; }
+    public IReadOnlyList<string>? IncludeGlobs { get; init; }
 }
 
 public sealed record BuildConfig

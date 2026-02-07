@@ -5,6 +5,8 @@ site:
   language: zh-CN
   pluginFailMode: strict
   timezone: Asia/Shanghai
+  autoSummary: true
+  autoSummaryMaxLength: 200
 content:
   provider: markdown
   markdown:

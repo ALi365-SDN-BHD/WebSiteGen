@@ -120,6 +120,7 @@ public sealed class PluginSourceGenerator : ISourceGenerator
             builder.AppendLine("();");
         }
 
+        builder.AppendLine("        yield break;");
         builder.AppendLine("    }");
         builder.AppendLine("}");
 

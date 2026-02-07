@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Json;
 
 namespace SiteGen.Shared;
@@ -52,13 +53,16 @@ public sealed class ConsoleLogger : ILogger
 
         if (_format == "json")
         {
-            var payload = new
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
             {
-                ts = DateTimeOffset.UtcNow.ToString("O"),
-                level = level.ToString(),
-                msg = message
-            };
-            Console.Error.WriteLine(JsonSerializer.Serialize(payload));
+                writer.WriteStartObject();
+                writer.WriteString("ts", DateTimeOffset.UtcNow.ToString("O"));
+                writer.WriteString("level", level.ToString());
+                writer.WriteString("msg", message);
+                writer.WriteEndObject();
+            }
+            Console.Error.WriteLine(System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan));
             return;
         }
 

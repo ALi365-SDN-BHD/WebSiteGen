@@ -1,16 +1,20 @@
 using Scriban;
 using Scriban.Runtime;
 using SiteGen.Shared;
+using System.Collections.Concurrent;
 
 namespace SiteGen.Rendering.Scriban;
 
 public sealed class ScribanTemplateRenderer
 {
     private readonly string _layoutsDir;
+    private readonly FileTemplateLoader _templateLoader;
+    private readonly ConcurrentDictionary<string, CachedTemplate> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     public ScribanTemplateRenderer(string layoutsDir)
     {
         _layoutsDir = layoutsDir;
+        _templateLoader = new FileTemplateLoader(_layoutsDir);
     }
 
     public string RenderPage(string templateRelativePath, PageModel model)
@@ -27,34 +31,22 @@ public sealed class ScribanTemplateRenderer
 
     private string Render(string templateRelativePath, ScriptObject globals)
     {
-        var templatePath = Path.Combine(_layoutsDir, templateRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(templatePath))
+        var cached = GetCachedTemplate(templateRelativePath);
+        if (cached.LayoutTemplateRelativePath is not null)
         {
-            throw new RenderException($"Template not found: {templateRelativePath}");
-        }
-
-        var templateText = File.ReadAllText(templatePath);
-        if (TryExtractLayoutDirective(templateText, out var layoutTemplateRelativePath, out var bodyTemplateText))
-        {
-            var body = RenderTemplateText(templateRelativePath, templatePath, bodyTemplateText, globals);
+            var body = RenderTemplate(cached.Template, templateRelativePath, globals);
             globals.SetValue("content", body, readOnly: true);
-            return Render(layoutTemplateRelativePath, globals);
+            return Render(cached.LayoutTemplateRelativePath, globals);
         }
 
-        return RenderTemplateText(templateRelativePath, templatePath, templateText, globals);
+        return RenderTemplate(cached.Template, templateRelativePath, globals);
     }
 
-    private string RenderTemplateText(string templateRelativePath, string templatePath, string templateText, ScriptObject globals)
+    private string RenderTemplate(Template template, string templateRelativePath, ScriptObject globals)
     {
-        var template = Template.Parse(templateText, templatePath);
-        if (template.HasErrors)
-        {
-            throw new RenderException(template.Messages.ToString());
-        }
-
         var context = new TemplateContext
         {
-            TemplateLoader = new FileTemplateLoader(_layoutsDir),
+            TemplateLoader = _templateLoader,
             EnableRelaxedMemberAccess = true,
             EnableRelaxedTargetAccess = true,
             EnableNullIndexer = true
@@ -70,6 +62,49 @@ public sealed class ScribanTemplateRenderer
         {
             throw new RenderException($"Render failed: {templateRelativePath}", ex);
         }
+    }
+
+    private CachedTemplate GetCachedTemplate(string templateRelativePath)
+    {
+        var templatePath = Path.Combine(_layoutsDir, templateRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var fileInfo = new FileInfo(templatePath);
+        if (!fileInfo.Exists)
+        {
+            throw new RenderException($"Template not found: {templateRelativePath}");
+        }
+
+        var signature = new FileSignature(fileInfo.LastWriteTimeUtc, fileInfo.Length);
+        if (_cache.TryGetValue(templatePath, out var existing) && existing.Signature.Equals(signature))
+        {
+            return existing;
+        }
+
+        var templateText = File.ReadAllText(templatePath);
+        CachedTemplate parsed;
+        if (TryExtractLayoutDirective(templateText, out var layoutTemplateRelativePath, out var bodyTemplateText))
+        {
+            var bodyTemplate = ParseTemplateOrThrow(bodyTemplateText, templatePath, templateRelativePath);
+            parsed = new CachedTemplate(signature, bodyTemplate, layoutTemplateRelativePath);
+        }
+        else
+        {
+            var template = ParseTemplateOrThrow(templateText, templatePath, templateRelativePath);
+            parsed = new CachedTemplate(signature, template, null);
+        }
+
+        _cache[templatePath] = parsed;
+        return parsed;
+    }
+
+    private static Template ParseTemplateOrThrow(string text, string templatePath, string templateRelativePath)
+    {
+        var template = Template.Parse(text, templatePath);
+        if (template.HasErrors)
+        {
+            throw new RenderException($"Template parse error: {templateRelativePath}\n{template.Messages}");
+        }
+
+        return template;
     }
 
     private static bool TryExtractLayoutDirective(string templateText, out string layoutTemplateRelativePath, out string bodyTemplateText)
@@ -165,4 +200,8 @@ public sealed class ScribanTemplateRenderer
         value = text.Substring(start + 1, end - start - 1);
         return !string.IsNullOrWhiteSpace(value);
     }
+
+    private readonly record struct FileSignature(DateTime LastWriteTimeUtc, long Length);
+
+    private sealed record CachedTemplate(FileSignature Signature, Template Template, string? LayoutTemplateRelativePath);
 }

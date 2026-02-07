@@ -15,6 +15,35 @@
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <BuildInfoVersionBase Condition="'$(VersionPrefix)' != ''">$(VersionPrefix)</BuildInfoVersionBase>
+    <BuildInfoVersionBase Condition="'$(BuildInfoVersionBase)' == '' and '$(Version)' != ''">$(Version)</BuildInfoVersionBase>
+    <BuildInfoVersionBase Condition="'$(BuildInfoVersionBase)' == ''">1.0.0</BuildInfoVersionBase>
+
+    <BuildInfoVersion Condition="'$(SourceRevisionId)' != ''">$(BuildInfoVersionBase)+$(SourceRevisionId)</BuildInfoVersion>
+    <BuildInfoVersion Condition="'$(BuildInfoVersion)' == ''">$(BuildInfoVersionBase)</BuildInfoVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$(IntermediateOutputPath)CliBuildInfo.g.cs" />
+  </ItemGroup>
+
+  <Target Name="GenerateCliBuildInfo" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <_CliBuildInfoLines Include="namespace SiteGen.Cli" />
+      <_CliBuildInfoLines Include="{" />
+      <_CliBuildInfoLines Include="internal static class CliBuildInfo" />
+      <_CliBuildInfoLines Include="{" />
+      <_CliBuildInfoLines Include="    public const string Version = &quot;$(BuildInfoVersion)&quot;%3B" />
+      <_CliBuildInfoLines Include="}" />
+      <_CliBuildInfoLines Include="}" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)CliBuildInfo.g.cs"
+                      Lines="@(_CliBuildInfoLines)"
+                      Overwrite="true"
+                      Encoding="UTF-8" />
+  </Target>
+
   <PropertyGroup Condition="'$(Configuration)' == 'AOT'">
     <PublishAot>true</PublishAot>
     <PublishSingleFile>true</PublishSingleFile>
