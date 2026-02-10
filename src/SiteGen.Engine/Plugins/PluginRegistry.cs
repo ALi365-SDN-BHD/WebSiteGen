@@ -15,6 +15,7 @@ public sealed class BuiltInPluginSource : IPluginSource
 {
     public IEnumerable<ISiteGenPlugin> GetPlugins()
     {
+        yield return new BuiltIn.PagesIndexPlugin();
         yield return new BuiltIn.TaxonomyPlugin();
         yield return new BuiltIn.SitemapPlugin();
         yield return new BuiltIn.RssPlugin();

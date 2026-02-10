@@ -22,7 +22,7 @@
       "outputPath": "categories/index.html",
       "url": "/categories/",
       "template": "pages/page.html",
-      "contentHash": "d54eb30b300db54b4f14b425b80b7f4eaa3b18c12e2ecb4c3f513712b270cba5",
+      "contentHash": "1dc5ea0aaeb46b46950148b7cb4f494d19105b9a37a50b52a18048e4803a57da",
       "routeHash": "2a9ee5d91402c4a7a9bd9a8ddb918b5d7942a30f6364d92edd8667d2d5ea5c9f",
       "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },
@@ -94,7 +94,7 @@
       "outputPath": "tags/index.html",
       "url": "/tags/",
       "template": "pages/page.html",
-      "contentHash": "634eae317c8588394bf54afb93d7b1a55a5396ffa1ffb50cd73c861a2b69d2fa",
+      "contentHash": "ea612fd424a7b16b2f405a2f3757101a18b0b4180077ca3082064ed427b9d14a",
       "routeHash": "b60552624b1a7f3f5eba58697806aaa0ec5207a4aeffe66c0152a2588e4f5066",
       "templateHash": "eb6f4c5c7b9db9704ddf764b955aeb10d8784e3da89fc3905886b4211205086f"
     },

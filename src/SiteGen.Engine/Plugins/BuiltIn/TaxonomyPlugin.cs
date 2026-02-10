@@ -9,7 +9,7 @@ namespace SiteGen.Engine.Plugins.BuiltIn;
 public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterBuildPlugin
 {
     public string Name => "taxonomy";
-    public string Version => "2.3.1";
+    public string Version => "2.4.0";
 
     public IReadOnlyList<(ContentItem Item, RouteInfo Route, DateTimeOffset LastModified)> DerivePages(BuildContext context)
     {
@@ -38,6 +38,7 @@ public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterB
 
                 var kind = string.IsNullOrWhiteSpace(kindConfig.Kind) ? key : kindConfig.Kind.Trim();
                 var terms = BuildIndex(context.Routed, key, itemFields);
+                MergeEnsureTerms(context, kind, terms);
                 if (terms.Count == 0)
                 {
                     continue;
@@ -58,6 +59,8 @@ public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterB
 
         var tags = BuildIndex(context.Routed, "tags", itemFields);
         var categories = BuildIndex(context.Routed, "categories", itemFields);
+        MergeEnsureTerms(context, "tags", tags);
+        MergeEnsureTerms(context, "categories", categories);
 
         if (tags.Count == 0 && categories.Count == 0)
         {
@@ -112,6 +115,7 @@ public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterB
 
                 var kind = string.IsNullOrWhiteSpace(kindConfig.Kind) ? key : kindConfig.Kind.Trim();
                 var terms = BuildIndex(context.Routed, key, itemFields);
+                MergeEnsureTerms(context, kind, terms);
                 if (terms.Count == 0)
                 {
                     continue;
@@ -124,12 +128,14 @@ public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterB
         else
         {
             var tags = BuildIndex(context.Routed, "tags", itemFields);
+            MergeEnsureTerms(context, "tags", tags);
             if (tags.Count > 0)
             {
                 WriteKind(writer, context.BaseUrl, key: "tags", kind: "tags", title: "Tags", tags);
             }
 
             var categories = BuildIndex(context.Routed, "categories", itemFields);
+            MergeEnsureTerms(context, "categories", categories);
             if (categories.Count > 0)
             {
                 WriteKind(writer, context.BaseUrl, key: "categories", kind: "categories", title: "Categories", categories);
@@ -640,6 +646,7 @@ public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterB
 
                 var kind = string.IsNullOrWhiteSpace(kindConfig.Kind) ? key : kindConfig.Kind.Trim();
                 var terms = BuildIndex(context.Routed, key, itemFields);
+                MergeEnsureTerms(context, kind, terms);
                 if (terms.Count == 0)
                 {
                     continue;
@@ -652,12 +659,14 @@ public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterB
         else
         {
             var tags = BuildIndex(context.Routed, "tags", itemFields);
+            MergeEnsureTerms(context, "tags", tags);
             if (tags.Count > 0)
             {
                 taxonomy["tags"] = BuildKindData(key: "tags", kind: "tags", title: "Tags", tags);
             }
 
             var categories = BuildIndex(context.Routed, "categories", itemFields);
+            MergeEnsureTerms(context, "categories", categories);
             if (categories.Count > 0)
             {
                 taxonomy["categories"] = BuildKindData(key: "categories", kind: "categories", title: "Categories", categories);
@@ -820,6 +829,54 @@ public sealed class TaxonomyPlugin : ISiteGenPlugin, IDerivePagesPlugin, IAfterB
         }
 
         return null;
+    }
+
+    private static void MergeEnsureTerms(BuildContext context, string kind, Dictionary<string, TaxonomyTerm> terms)
+    {
+        if (!context.Data.TryGetValue("taxonomy_ensure_terms", out var obj) || obj is null)
+        {
+            return;
+        }
+
+        if (obj is not Dictionary<string, List<Dictionary<string, object>>> map)
+        {
+            return;
+        }
+
+        if (!map.TryGetValue(kind, out var list) || list is null || list.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var termObj in list)
+        {
+            if (termObj is null)
+            {
+                continue;
+            }
+
+            var title = termObj.TryGetValue("title", out var t) && t is not null ? (t.ToString() ?? string.Empty).Trim() : string.Empty;
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                continue;
+            }
+
+            var slug = termObj.TryGetValue("slug", out var s) && s is not null ? (s.ToString() ?? string.Empty).Trim() : string.Empty;
+            if (string.IsNullOrWhiteSpace(slug))
+            {
+                slug = Slugify(title);
+            }
+
+            if (string.IsNullOrWhiteSpace(slug))
+            {
+                continue;
+            }
+
+            if (!terms.ContainsKey(slug))
+            {
+                terms[slug] = new TaxonomyTerm(title, slug);
+            }
+        }
     }
 
     private static string Slugify(string text)

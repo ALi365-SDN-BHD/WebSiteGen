@@ -232,6 +232,66 @@ Notion 的 properties 很多时候并不都需要进入模板。你可以用 `fi
 
 提示：如果你只是想在模板里读取一个链接，建议不要把字段名命名为 `Url`（归一化后为 `url`），避免与“路由覆盖字段”混淆。
 
+#### relation 的 *_links 派生字段（用于输出 title + url）
+
+对于 Notion 的 `relation` 字段，除了原始的 `page.fields.<key>.value`（关联页面 id 列表）之外，引擎会额外生成一个派生字段：
+
+- `page.fields.<key>_links.type == "list"`
+- `page.fields.<key>_links.value == [{ id, title, url, slug, type }, ...]`
+
+其中：
+- `id/title/slug/type`：当关联页面也在本次拉取结果里时可填充；否则只有 `id`，其他为 null
+- `url`：优先取关联页面的 `Url` 属性（Notion url 类型字段，归一化 key 为 `url`）并提升到 meta 后得到的外链；未设置则为 null
+
+模板示例（生成类似 `visa (https://...)` 的结构）：
+
+```scriban
+{{ for x in page.fields.payments_links.value }}
+  {{ if x.url }}
+    <a href="{{ x.url }}">{{ x.title }}</a>
+  {{ else }}
+    {{ x.title }}
+  {{ end }}
+{{ end }}
+```
+
+#### 用 pageId 获取关联页面详情（site.data.pages_by_id）
+
+当你在模板里拿到 Notion 的 pageId（通常来自 `relation` 字段的 `page.fields.<key>.value[]`），你可以通过内置 `pages-index` 插件提供的全站索引获取该页面的详情：
+
+- `site.data.pages_by_id[pageId]` → `{ id, title, url, slug, type, publish_date, summary, fields }`
+- pages-index 与内容源无关：Markdown/Notion/多源 sources 都可使用该索引
+- 该索引在构建阶段生成，模板读取不会触发 API 请求；如需补全“不在本站输出范围内”的页面，需要开启 pages-index 的 Notion 补全能力（支持缓存；仅 Notion 内容源下生效）
+
+补充：对于“不在本站输出范围内”的 Notion 页面（例如 relation 指向另一个数据库的页面），如果你开启了 pages-index 的 Notion 补全能力，会写入：
+
+- `url`：空字符串（因为它不是本站路由）
+- `external_url`：Notion 页面 URL（可用于直接跳转）
+
+示例（从 relation 的 id 列表映射到标题与链接）：
+
+```scriban
+{{ for pid in page.fields.related_posts.value }}
+  {{ p = site.data.pages_by_id[pid] }}
+  {{ if p }}
+    {{ if p.url }}
+      <a href="{{ site.base_url }}{{ p.url }}">{{ p.title }}</a>
+    {{ else }}
+      <a href="{{ p.external_url }}">{{ p.title }}</a>
+    {{ end }}
+  {{ end }}
+{{ end }}
+```
+
+#### relation 用作 tags/categories（taxonomy term 生成规则）
+
+taxonomy 插件只读取 `meta.tags` / `meta.categories` 来生成 `/tags/` 与 `/categories/` 派生页。Notion provider 会把 `tags/categories` 从 fields 提升到 meta：
+
+- 如果 `tags/categories` 是普通的 `multi_select`（推荐），则 term 直接是你选择的字符串
+- 如果 `tags/categories` 是 `relation`，则会优先使用 `tags_links/categories_links` 里的 `title` 生成 term（回退 `slug`，再回退 `id`）
+
+当 relation 的目标页面不在当前 `databaseId` 这次 query 的结果里时，引擎会额外请求 Notion API 拉取这些目标页面的基础信息来补齐 `title/slug`，以便生成可读的 term（最多补拉 200 个目标页；超过会截断，避免构建时请求爆炸）。
+
 ### 白名单（推荐：可控、安全、模板更稳定）
 
 ```yaml

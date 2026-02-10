@@ -37,6 +37,11 @@ content:
 - `mode: content`：会生成路由与页面（常规内容）
 - `mode: data`：不会生成路由；会被分组注入 `site.modules.<type>[]`（结构化内容块）
 
+补充：taxonomy（分类/标签）与 `mode: data`
+
+- 如果你有“分类数据库/标签数据库”，可以把它作为一个 `mode: data` 的 source 加进来，并将 `name` 设置为 `categories` 或 `tags`。
+- 构建时会把该 data 源的条目当作 taxonomy term 列表：即使某个分类/标签当前没有任何文章引用，也会生成对应的空聚合页（避免点击菜单后 404）。
+
 ## 组合示例 1：全 Markdown（内容 + modules）
 
 对照可运行示例：`examples/starter/site.modules.yaml`。
@@ -100,6 +105,14 @@ content:
       mode: data
       notion:
         databaseId: "db_modules"
+        filterProperty: Enabled
+        filterType: checkbox_true
+        fieldPolicy: { mode: all }
+    - type: notion
+      name: categories
+      mode: data
+      notion:
+        databaseId: "db_categories"
         filterProperty: Enabled
         filterType: checkbox_true
         fieldPolicy: { mode: all }

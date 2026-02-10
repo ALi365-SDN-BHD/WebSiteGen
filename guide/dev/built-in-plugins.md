@@ -82,6 +82,14 @@
 - term 页支持分页路由：`/<kind>/<slug>/page/<n>/`（pageSize 由 `taxonomy.pageSize` 控制）
 - taxonomy 索引页可禁用：`taxonomy.indexEnabled=false`（或 `taxonomy.kinds[].indexEnabled=false`）
 
+Notion 补充：
+- taxonomy 只看 meta，不看 `page.fields.*`；因此 Notion 的 `tags/categories` 建议优先使用 `multi_select`
+- 如果你的 Notion `tags/categories` 使用 `relation`，Notion provider 会把 relation 目标页的 `title`（回退 `slug`，再回退 `id`）提升为 `meta.tags/meta.categories` 的 term 列表，确保 taxonomy 生成可读的分类/标签
+- 当 relation 目标页不在当前 database query 结果里时，会额外请求 Notion `/v1/pages/{id}` 补齐目标页 title/slug（最多 200 个，避免请求爆炸）
+- 空分类/空标签页自动生成（避免点击后 404）：
+  - 如果存在 `mode: data` 且 `name: categories`（或 `name: tags`）的内容源，引擎会把该数据源的条目作为 taxonomy term 列表；即使该 term 当前没有任何文章引用，也会生成对应的 term 页（slug 优先取条目的 slug）。
+  - 如果使用 Notion 内容源，引擎会从 Notion 数据库 schema 中提取 `select/multi_select/status` 的 `options[].name`，自动确保 `tags/categories`（以及 `taxonomy.kinds[].key` 对应字段）的 term 页存在。
+
 模板示例（taxonomy term 页分页）：
 ```scriban
 {% layout "layouts/base.html" %}
@@ -109,6 +117,43 @@
     {{ end }}
   </nav>
 </article>
+```
+
+## pages-index（IDerivePagesPlugin）
+
+文件：`PagesIndexPlugin.cs`
+
+生成一个“全站按 id 索引”的结构化数据，注入到模板变量：
+
+- `site.data.pages_by_id[pageId]` → `{ id, title, url, slug, type, publish_date, summary, fields }`
+
+用途：
+- 当模板里只有一个 pageId（例如 Notion relation 返回的 id 列表）时，可以用它查到该页面的 URL/标题等信息
+
+说明：
+- pages-index 与内容源无关：只要构建能产出 routed 内容页（posts/pages 等），就会进入索引
+- 该索引只覆盖 routed 内容页，不包含 derived 路由（taxonomy/pagination/archive 等）
+- `mode: data` 的内容项不会生成 routed 页面，因此不会进入 `pages_by_id`（除非被 Notion 补全写入）
+- 可选：对 Notion relation 的 pageId 做“批量补全”，把不在本站的页面也加入索引（需要 `NOTION_TOKEN`）：
+- 补全只发生在构建阶段（derive-pages），模板里读取 `site.data.pages_by_id[...]` 不会触发 API 请求
+- 补全得到的页面会自动解析 Notion properties 到 `fields`（无需额外指定字段名）
+- 仅当站点使用 Notion 内容源时才会启用补全；其他内容源下该配置会被忽略
+- `field_keys`：指定要扫描哪些字段来收集 relation pageId（字段值应为 `page.fields.<key>.value[]` 的 id 列表）。不指定则不会做任何补全，只会生成本站 routed 页面索引。
+
+```yaml
+theme:
+  params:
+    pages_index:
+      resolve_notion:
+        enabled: true
+        field_keys: ["related_posts", "payments", "categories"]
+        max_items: 200
+        concurrency: 4
+        max_rps: 3
+        max_retries: 5
+        request_delay_ms: 0
+        cache_mode: readwrite   # off | readwrite | readonly
+        cache_path: .cache/notion/pages-index.json
 ```
 
 ## pagination（IDerivePagesPlugin）

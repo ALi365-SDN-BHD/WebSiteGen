@@ -22,6 +22,9 @@
 | `webhook` | Webhook 触发器 |
 | `version` | 版本信息 |
 
+说明：
+- 执行大多数命令时，CLI 会先输出一行 `sitegen <version>`（用于确认当前运行版本；`help/version` 例外）
+
 ## 关键覆盖关系
 
 构建相关的覆盖顺序（从高到低）：

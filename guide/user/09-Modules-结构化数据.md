@@ -195,3 +195,43 @@ content:
 - sources 里 modules 的 `mode` 是否为 `data`
 - 模块数据里是否写了 `type: banner`
 - 多语言站点是否被 locale 过滤掉（例如站点语言是 en-US，但你只录入了 zh-CN 的 modules）
+
+### 3）配置多个 `mode: data` 的 sources，会如何合并？
+
+可以配置多个 `mode: data` 的 sources。引擎会把这些 sources 的内容项全部加载出来，然后统一作为 modules 注入到 `site.modules`：
+
+- 所有 `mode: data` 的内容项都不会生成路由页面，只影响模板渲染
+- modules 按每个内容项的 `type` 分组（来自 front matter / Notion properties），不同 sources 的同名 type 会合并到同一个 `site.modules.<type>[]`
+- 多 source 模式下，每个内容项的 `id` 会自动加前缀：`<sourceKey>:<sourceId>`（避免不同 source 的 id 冲突）
+
+示例：3 个 data sources（2 个 markdown data + 1 个 notion data）
+
+```yaml
+content:
+  provider: sources
+  sources:
+    - type: markdown
+      name: modules_marketing
+      mode: data
+      markdown: { dir: data/marketing, defaultType: module }
+    - type: markdown
+      name: modules_product
+      mode: data
+      markdown: { dir: data/product, defaultType: module }
+    - type: notion
+      name: modules_ops
+      mode: data
+      notion:
+        databaseId: "db_modules_ops"
+        filterProperty: Enabled
+        filterType: checkbox_true
+        fieldPolicy: { mode: all }
+```
+
+模板读取方式不变：
+
+```scriban
+{{ for b in site.modules.banner }}
+  <h2>{{ b.title }}</h2>
+{{ end }}
+```

@@ -168,6 +168,7 @@ content:
 
 - `mode: content` 的源会生成路由与页面
 - `mode: data` 的源不会生成路由，会注入 `site.modules`（详见：[09-Modules-结构化数据](./09-Modules-结构化数据.md)）
+- 当 `mode: data` 的 source 配置为 `name: categories`（或 `name: tags`）时，会被用于 taxonomy：即使某个分类/标签当前没有任何文章引用，也会生成对应的空聚合页，避免点击后 404。
 
 ### build：输出目录与构建策略
 

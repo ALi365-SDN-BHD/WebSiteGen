@@ -86,7 +86,7 @@ public sealed class NotionContentProvider : IContentProvider
                         ["notionPageId"] = pageId
                     };
 
-                    var fields = ExtractFields(props, policyMode, allowed);
+                    var fields = ExtractFields(props, policyMode, allowed, out var relationKeys);
                     PromoteFieldToMeta(fields, meta, "language", "language");
                     PromoteFieldToMeta(fields, meta, "i18n_key", "i18nKey");
                     PromoteFieldToMeta(fields, meta, "i18nkey", "i18nKey");
@@ -97,7 +97,7 @@ public sealed class NotionContentProvider : IContentProvider
                     PromoteTaxonomyFieldToMeta(fields, meta, "tags");
                     PromoteTaxonomyFieldToMeta(fields, meta, "categories");
 
-                    drafts.Add(new PageDraft(pageId, title, slug, type, publishAt, lastEditedTime, meta, fields));
+                    drafts.Add(new PageDraft(pageId, title, slug, type, publishAt, lastEditedTime, meta, fields, relationKeys));
                 }
 
                 if (hitMax)
@@ -153,11 +153,27 @@ public sealed class NotionContentProvider : IContentProvider
             }
         }
 
+        var targets = drafts.Select(d =>
+        {
+            var url = d.Meta.TryGetValue("url", out var u) ? u?.ToString() : null;
+            url = string.IsNullOrWhiteSpace(url) ? null : url.Trim();
+            return new RelationTargetInfo(d.PageId, d.Title, d.Slug, d.Type, url);
+        });
+        var pageIndex = NotionRelationLinkBuilder.BuildIndex(targets);
+        pageIndex = await ResolveMissingTaxonomyRelationTargetsAsync(client, drafts, pageIndex, cancellationToken);
         var items = new List<ContentItem>(drafts.Count);
         for (var i = 0; i < drafts.Count; i++)
         {
             var d = drafts[i];
             var contentHtml = contentHtmls[i] ?? string.Empty;
+            var fields = d.Fields;
+            if (d.RelationKeys is { Count: > 0 })
+            {
+                fields = NotionRelationLinkBuilder.EnrichFields(fields, d.RelationKeys, pageIndex);
+            }
+
+            NotionTaxonomyPromoter.PromoteRelationTaxonomyTerms(d.Meta, fields, "tags");
+            NotionTaxonomyPromoter.PromoteRelationTaxonomyTerms(d.Meta, fields, "categories");
 
             if (!d.Meta.TryGetValue("summary", out var summaryObj) || string.IsNullOrWhiteSpace(summaryObj?.ToString()))
             {
@@ -179,11 +195,145 @@ public sealed class NotionContentProvider : IContentProvider
                 PublishAt: d.PublishAt,
                 ContentHtml: contentHtml,
                 Meta: d.Meta,
-                Fields: d.Fields
+                Fields: fields
             ));
         }
 
         return items;
+    }
+
+    private async Task<IReadOnlyDictionary<string, RelationTargetInfo>> ResolveMissingTaxonomyRelationTargetsAsync(
+        NotionApiClient client,
+        IReadOnlyList<PageDraft> drafts,
+        IReadOnlyDictionary<string, RelationTargetInfo> existingIndex,
+        CancellationToken cancellationToken)
+    {
+        var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < drafts.Count; i++)
+        {
+            var d = drafts[i];
+            AddRelationIdsIfPresent(d, "tags", needed);
+            AddRelationIdsIfPresent(d, "categories", needed);
+        }
+
+        if (needed.Count == 0)
+        {
+            return existingIndex;
+        }
+
+        var missing = new List<string>();
+        foreach (var id in needed)
+        {
+            if (!existingIndex.ContainsKey(id))
+            {
+                missing.Add(id);
+            }
+        }
+
+        if (missing.Count == 0)
+        {
+            return existingIndex;
+        }
+
+        var maxResolve = 200;
+        if (missing.Count > maxResolve)
+        {
+            missing = missing.Take(maxResolve).ToList();
+        }
+
+        var concurrency = _options.RenderConcurrency is > 0 ? _options.RenderConcurrency.Value : 4;
+        using var sem = new SemaphoreSlim(concurrency, concurrency);
+        var tasks = new Task<RelationTargetInfo?>[missing.Count];
+        for (var i = 0; i < missing.Count; i++)
+        {
+            var id = missing[i];
+            tasks[i] = ResolveOneAsync(id);
+        }
+
+        await Task.WhenAll(tasks);
+
+        Dictionary<string, RelationTargetInfo>? merged = null;
+        for (var i = 0; i < tasks.Length; i++)
+        {
+            var t = tasks[i].Result;
+            if (t is null)
+            {
+                continue;
+            }
+
+            merged ??= new Dictionary<string, RelationTargetInfo>(existingIndex, StringComparer.OrdinalIgnoreCase);
+            merged[t.PageId] = t;
+        }
+
+        return merged ?? existingIndex;
+
+        void AddRelationIdsIfPresent(PageDraft d, string key, HashSet<string> set)
+        {
+            if (!HasRelationKey(d.RelationKeys, key))
+            {
+                return;
+            }
+
+            if (!d.Fields.TryGetValue(key, out var field))
+            {
+                return;
+            }
+
+            if (field.Value is not IEnumerable<string> ids)
+            {
+                return;
+            }
+
+            foreach (var raw in ids)
+            {
+                var id = (raw ?? string.Empty).Trim();
+                if (id.Length > 0)
+                {
+                    set.Add(id);
+                }
+            }
+        }
+
+        static bool HasRelationKey(IReadOnlyList<string> relationKeys, string key)
+        {
+            for (var i = 0; i < relationKeys.Count; i++)
+            {
+                if (string.Equals(relationKeys[i], key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        async Task<RelationTargetInfo?> ResolveOneAsync(string pageId)
+        {
+            await sem.WaitAsync(cancellationToken);
+            try
+            {
+                using var doc = await client.GetAsync($"https://api.notion.com/v1/pages/{pageId}", cancellationToken);
+                var page = doc.RootElement;
+                var props = page.TryGetProperty("properties", out var p) && p.ValueKind == JsonValueKind.Object ? p : default;
+                var title = ExtractTitle(props) ?? pageId;
+                var slug = ExtractSlug(props) ?? Slugify(title) ?? pageId.Replace("-", string.Empty, StringComparison.Ordinal);
+                var type = ExtractType(props) ?? "page";
+
+                var url = GetString(page, "url");
+                url = string.IsNullOrWhiteSpace(url) ? null : url.Trim();
+
+                return new RelationTargetInfo(pageId, title, slug, type, url);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn($"event=notion.relation.resolve_failed pageId={pageId} message={ex.Message}");
+                return null;
+            }
+            finally
+            {
+                sem.Release();
+            }
+        }
     }
 
     private sealed record PageDraft(
@@ -194,7 +344,8 @@ public sealed class NotionContentProvider : IContentProvider
         DateTimeOffset PublishAt,
         string? LastEditedTime,
         Dictionary<string, object> Meta,
-        IReadOnlyDictionary<string, ContentField> Fields);
+        IReadOnlyDictionary<string, ContentField> Fields,
+        IReadOnlyList<string> RelationKeys);
 
     private static PageHtmlCache? CreatePageHtmlCache(NotionProviderOptions options)
     {
@@ -504,11 +655,17 @@ public sealed class NotionContentProvider : IContentProvider
         return set;
     }
 
-    private static IReadOnlyDictionary<string, ContentField> ExtractFields(JsonElement properties, string policyMode, HashSet<string>? allowed)
+    private static IReadOnlyDictionary<string, ContentField> ExtractFields(
+        JsonElement properties,
+        string policyMode,
+        HashSet<string>? allowed,
+        out IReadOnlyList<string> relationKeys)
     {
+        var relations = new List<string>();
         var fields = new Dictionary<string, ContentField>(StringComparer.OrdinalIgnoreCase);
         if (properties.ValueKind != JsonValueKind.Object)
         {
+            relationKeys = relations;
             return fields;
         }
 
@@ -536,12 +693,17 @@ public sealed class NotionContentProvider : IContentProvider
                 continue;
             }
 
-            if (TryParseNotionPropertyToField(prop.Value, out var field))
+            if (TryParseNotionPropertyToField(prop.Value, out var field, out var notionType))
             {
                 fields[key] = field;
+                if (string.Equals(notionType, "relation", StringComparison.OrdinalIgnoreCase))
+                {
+                    relations.Add(key);
+                }
             }
         }
 
+        relationKeys = relations;
         return fields;
     }
 
@@ -581,9 +743,10 @@ public sealed class NotionContentProvider : IContentProvider
         return sb.ToString().Trim('_');
     }
 
-    private static bool TryParseNotionPropertyToField(JsonElement property, out ContentField field)
+    private static bool TryParseNotionPropertyToField(JsonElement property, out ContentField field, out string notionType)
     {
         field = default!;
+        notionType = string.Empty;
         if (!property.TryGetProperty("type", out var typeEl) || typeEl.ValueKind != JsonValueKind.String)
         {
             return false;
@@ -595,6 +758,7 @@ public sealed class NotionContentProvider : IContentProvider
             return false;
         }
 
+        notionType = type;
         switch (type)
         {
             case "title":
@@ -964,7 +1128,7 @@ public sealed class NotionContentProvider : IContentProvider
             var list = new List<object>();
             foreach (var item in arr.EnumerateArray())
             {
-                if (TryParseNotionPropertyToField(item, out var inner) && inner.Value is not null)
+                if (TryParseNotionPropertyToField(item, out var inner, out _) && inner.Value is not null)
                 {
                     list.Add(inner.Value);
                 }
